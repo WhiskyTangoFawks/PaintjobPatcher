@@ -3,10 +3,11 @@ unit FactionPaintjobPatcher;
 uses 'lib\mxpf';
 
 var
-    config : TMemIniFile;
-    masterList, factions, nonFactionLists, defaultFaction, epicFaction, defaultPaSets, epicPaSets : TStringList;
+    config_factions, config_options : TMemIniFile;
+    listMaster, listFactions, listDefaultFactions, listEpicFactions, listDefaultPaSets, listEpicPaSets, filter_paintjob_ap, filter_paintjob_kywd, filter_allow_redistribute, filter_eval_furn, filter_eval_item, filter_eval_omod, filter_eval_lvli: TStringList;
     template_keyword, template_modcol, template_pa_lvli : IInterface;
-    fact_name, fact_kywd, fact_alt_kywds, fact_paintjobs, fact_filter_paint, fact_filter_lvli : integer;
+    fact_name, fact_kywd, fact_alt_kywds, fact_paintjobs, fact_filter_paint, fact_filter_lvli, fact_filter_item : integer;
+    epic_kywd_formId : cardinal;
 
 const	
     masterPlugin = fileByName('FactionPaintjobs.esp');
@@ -25,8 +26,17 @@ begin
     InitializeMXPF;
     
     template_keyword := MainRecordByEditorID(GroupBySignature(masterPlugin, 'KYWD'), 'if_tmp_Template_Restricted');
+    if not assigned(template_keyword) then raise Exception.create('** ERROR ** Failed to find template_keyword');
+    
     template_modcol := MainRecordByEditorID(GroupBySignature(masterPlugin, 'OMOD'), 'modcol_template');
+    if not assigned(template_modcol) then raise Exception.create('** ERROR ** Failed to find template_modcol');
+    
     template_pa_lvli := MainRecordByEditorID(GroupBySignature(masterPlugin, 'LVLI'), 'LL_Armor_Power_Set_Template');
+    if not assigned(template_pa_lvli) then raise Exception.create('** ERROR ** template_pa_lvli');
+    
+    epic_kywd_formId := GetLoadOrderFormID(MainRecordByEditorID(GroupBySignature(fileByName('Fallout4.esm'), 'KYWD'), 'if_Epic_Restricted'));
+    
+
     
     //SetExclusions('Fallout4.esm,DLCCoast.esm,DLCRobot.esm,DLCNukaWorld.esm,DLCWorkshop01.esm,DLCWorkshop02.esm,DLCWorkshop03.esm');
     
@@ -38,20 +48,31 @@ begin
     AddMastersToFile(mxPatchFile, slMasters, False);
     
     //Initialize the faction config file;
-    initConfigFiles();
+    initConfig();
+    initFactions();
+    
 
     //Load the paintjobs, and copy Paintjobs to patch, so we can then filter COBJs by checking if the CNAM is in the patch
     LoadRecords('OMOD');
-    AddMessage('Processing OMODs to index Paint Jobs');
+    AddMessage('   ');
+    AddMessage('   ');
+    AddMessage('** Evaluating OMODs as potential paintjobs **');
     for i := MaxRecordIndex downto 0 do if (signature(GetRecord(i)) = 'OMOD') then if (NOT evalOmod(GetRecord(i))) then removeRecord(i);
-    CopyRecordsToPatch;
+    CopyRecordsToPatch; //copy OMODs to patch, so we can eval COBJs based on omod presence
     
-    //Load COBJs, and remove it the CNAM isn't in the patch
+    //Load COBJs, and remove if the CNAM isn't in the patch
     LoadRecords('COBJ');
-    for i := MaxRecordIndex downto 0 do 
-        if (signature(GetRecord(i)) = 'COBJ') then if (getFileName(getFile(winningOverride(linksTo(elementByPath(GetRecord(i), 'CNAM'))))) <> getFileName(mxPatchFile)) 
-        then removeRecord(i);
-    
+    AddMessage('   ');
+    AddMessage('   ');
+    AddMessage('** Evaluating COBJs for paintjobs copied to patch **');
+    for i := MaxRecordIndex downto 0 do if (signature(GetRecord(i)) = 'COBJ') then if (NOT evalCobj(GetRecord(i))) then removeRecord(i);   
+    CopyRecordsToPatch; //copy COBJs to patch, so we can process omods/cobjs
+
+    //*Process OMODs and COBJs first, so Paintjobs are Indexes
+    AddMessage('   ');
+    AddMessage('   ');
+    AddMessage('Processing OMODS/COBJs');
+    for i := 0 to MaxPatchRecordIndex do if (signature(GetPatchRecord(i)) = 'COBJ') then processOmodAndCobj(GetPatchRecord(i));
     
     //Load LVLIs to the patch and copy, so we can then filter FURNs if the LVLI is already in the patch;
     LoadRecords('LVLI');
@@ -59,26 +80,45 @@ begin
     for i := MaxRecordIndex downto 0 do if (signature(GetRecord(i)) = 'LVLI') then if (NOT evalLVLI(GetRecord(i))) then removeRecord(i);
     // then copy records to the patch file, so when evaluating FURN I know if target LVLIs are already flagged for patching
     CopyRecordsToPatch;
-    
-    //LoadRecords('ARMO');
-    //LoadRecords('WEAP');
-    LoadRecords('FURN');
-    AddMessage('Evaluating Lvli, Cobj, Weap, and ARMOs for patching');
+
+    //Process Remaining Records
+    LoadRecords('ARMO');
+    AddMessage('   ');
+    AddMessage('   ');
+    AddMessage('Evaluating ARMOs for patching');
     for i := MaxRecordIndex downto 0 do if (getElementEditValues(getRecord(i), 'Record Header\record flags\Non-Playable') = '1') then removeRecord(i);
     for i := MaxRecordIndex downto 0 do if (signature(getRecord(i)) = 'ARMO') then if (NOT evalItem(getRecord(i))) then removeRecord(i);
+    AddMessage('   ');
+    AddMessage('   ');
+    AddMessage('Evaluating WEAPs for patching');
+    LoadRecords('WEAP');
     for i := MaxRecordIndex downto 0 do if (signature(getRecord(i)) = 'WEAP') then if (NOT evalItem(getRecord(i))) then removeRecord(i);
+    AddMessage('   ');
+    AddMessage('   ');
+    AddMessage('Evaluating FURNs for patching');
+    LoadRecords('FURN');
     for i := MaxRecordIndex downto 0 do if (signature(getRecord(i)) = 'FURN') then if (NOT evalFurn(getRecord(i))) then removeRecord(i);
 
     
     // then copy records to the patch file
     CopyRecordsToPatch;
     
-   //*Process records
-    for i := 0 to MaxPatchRecordIndex do if (signature(GetPatchRecord(i)) = 'COBJ') then processCOBJ(GetPatchRecord(i));
-    for i := 0 to MaxPatchRecordIndex do if (signature(GetPatchRecord(i)) = 'LVLI') then processLVLI(GetPatchRecord(i));
-    for i := 0 to MaxPatchRecordIndex do if (signature(GetPatchRecord(i)) = 'ARMO') then processItem(GetPatchRecord(i));
-    for i := 0 to MaxPatchRecordIndex do if (signature(GetPatchRecord(i)) = 'WEAP') then processItem(GetPatchRecord(i));
 
+    AddMessage('   ');
+    AddMessage('   ');
+    AddMessage('Processing LVLIs');
+    for i := 0 to MaxPatchRecordIndex do if (signature(GetPatchRecord(i)) = 'LVLI') then processLVLI(GetPatchRecord(i));
+    AddMessage('   ');
+    AddMessage('   ');
+    AddMessage('Processing ARMOs');
+    for i := 0 to MaxPatchRecordIndex do if (signature(GetPatchRecord(i)) = 'ARMO') then processItem(GetPatchRecord(i));
+    AddMessage('   ');
+    AddMessage('   ');
+    AddMessage('Processing WEAPs');
+    for i := 0 to MaxPatchRecordIndex do if (signature(GetPatchRecord(i)) = 'WEAP') then processItem(GetPatchRecord(i));
+    AddMessage('   ');
+    AddMessage('   ');
+    AddMessage('Processing FURNs');
     //Process furniture after PA has been processed, so any missing keywords are already added
     for i := 0 to MaxPatchRecordIndex do if (signature(GetPatchRecord(i)) = 'FURN') then processFURN(GetPatchRecord(i));
     
@@ -89,64 +129,152 @@ function Finalize: integer;
 var
     i: integer;
 begin
-	logg(1, 'Finalizing');
+	addMessage('   ');
+    addMessage('   ');
+    addMessage('** Finalizing Patch **');
+    
     //TODO - reenable
-    //for i := 0 to MaxPatchRecordIndex do removeIdenticalToMaster(GetPatchRecord(i));
+    for i := 0 to MaxPatchRecordIndex do begin 
+        if (signature(GetPatchRecord(i)) <> 'COBJ')  AND (ReferencedByCount(GetPatchRecord(i)) < 1) then logg(5, 'Found unreferenced patch record: ' + EditorID(GetPatchRecord(i)) + ' '+ IntToHex(GetLoadOrderFormID(GetPatchRecord(i)), 8) + ' *****');
+        //removeIdenticalToMaster(GetPatchRecord(i)); //TODO - reenable
+    end;
     CleanMasters(mxPatchFile);
     PrintMXPFReport;
     FinalizeMXPF;
     
-    config.free;
-    for i := 0 to masterlist.count-1 do 
-        for j := 0 to masterList.objects[i].count-1 do 
-            masterList.objects[i].objects[j].free;
+    config_factions.free;
+    config_options.free;
+    for i := 0 to listMaster.count-1 do listMaster.objects[i].free;
     
-    masterList.free;
-
+    listMaster.free;
+    listDefaultFactions.free;
+    listDefaultPaSets.free;
+    listEpicFactions.free;
+    listEpicPaSets.free;
 end;
 //============================================================================
 function evalOmod(omod: IInterface): boolean;
 var
-    newKeyword: IInterface;
-    i, countMaster: integer;
-    master, faction: TStringList;
+    properties, refBy: IInterface;
+    i, j: integer;
+    listFaction, faction: TStringList;
+    prop: string;
+    hasMatSwap: boolean;
+    
     
 begin
     result := false;
     //exit if it's not a paintjob
-    if not getElementEditValues(omod, 'Record Header\record flags\Mod Collection') = '1' then exit;
-    if not isOmodCraftable(omod) then exit;
-    if not isPaintJob(omod) then exit;
-    result := true;
-    //TODO - figure out loadRecord(COBJ) for a specific record so I don't have to filter COBJ again when I already know which ones I want
+    if getElementEditValues(omod, 'Record Header\Record Flags\Mod Collection') = '1' then exit;
+    if not isRecordFiltered(linksTo(elementByPath(omod, 'DATA\Attach Point')), filter_paintjob_ap) then exit;
+    if not isRecordFiltered(omod, filter_eval_omod) then exit;
 
-    for countMaster := 0 to masterList.count -1 do begin
-        master := masterList.objects[countMaster];
-        for i := 0 to master.count -1 do begin
-            faction := master.objects[i];
-            if isFiltered(omod, faction.objects[fact_filter_paint]) then begin
-                faction.objects[fact_paintjobs].addObject(IntToHex(GetLoadOrderFormID(omod), 8), omod);
-                logg(3, 'Found Paintjob ' + editorId(omod) + ' for faction ' +masterList[countMaster] + ' - ' + master[i]);
+    addMessage('***** Evaluating Paintjob ' + getFileName(getFile(omod)) + ' - ' + EditorID(omod) + ' '+ IntToHex(GetLoadOrderFormID(omod), 8) + ' *****');
+    if not isOmodCraftable(omod) then begin
+        logg(2, 'Skipping uncraftable paintjob');
+        exit;
+    end;
+    
+    //If there are any properties, validate that it has a mat-swap or a color index
+    if (elementCount(ElementByPath(omod, 'DATA\Properties')) > 0) then begin
+        hasMatSwap := false;
+        properties := ElementByPath(omod, 'DATA\Properties');
+        for i := 0 to ElementCount(properties)-1 do begin
+            prop := getElementEditValues(ElementByIndex(properties, i), 'Property');
+            if (prop = 'MaterialSwaps') OR (prop = 'ColorRemappingIndex') then begin;
+                hasMatSwap := true;
+                break;
+            end;
+        end;
+        if not hasMatSwap OR containsText(editorId(omod), 'default') then begin
+            logg(2, 'Skipping paintjob without mapswap');
+            exit;
+        end;
+
+        if not isRecordFiltered(omod, filter_allow_redistribute) then begin
+            //Check refBy, if it's already assigned to a weapon, or already in a modcol, then we don't want to redistribute it
+            for i := 0 to ReferencedByCount(omod)-1 do begin
+                refBy := ReferencedByIndex(omod, i);
+                if not isWinningOverride(refBy) then continue;
+                if (signature(refBy) = 'WEAP') OR (signature(refBy) = 'ARMO') OR (signature(refBy) = 'QUST') OR (signature(refBy) = 'FLST') then begin
+                    logg(3, 'Paintjob is already distributed, returning false: ' + editorId(omod));
+                    result := false;
+                    exit;
+                end
+                else if (signature(refBy) = 'OMOD') then begin
+                    //TODO - I am not entirely sure what to do here, if the modcol isn't attached to anything it isn't valid
+                    //And even if it is, then it's part of some sort of random distribution, so it's probably OK to include...
+                end;
             end;
         end;
     end;
-
+    
+    result := true;
     
 end;
+
+//============================================================================
+function evalCobj(cobj: IInterface): boolean;
+var
+    cnam : IInterface;
+
+begin
+    result := false;
+    
+    cnam := winningOverride(linksTo(elementByPath(cobj, 'CNAM')));
+    if (getFileName(getFile(cnam)) <> getFileName(mxPatchFile)) then exit;
+    //addMessage('***** Evaluating '+ getFileName(getFile(cobj)) + ' - ' + EditorID(cobj) + ' '+ IntToHex(GetLoadOrderFormID(cobj), 8) + ' *****');
+    
+    result := true;
+end;
+
+//============================================================================
+procedure processOmodAndCobj(cobj: IInterface);
+var
+    omod: IInterface;
+    i: integer;
+    faction: TStringList;
+
+begin
+    omod := winningOverride(linksTo(elementByPath(cobj, 'CNAM')));
+    addMessage('***** Processing Paintjob ' + getFileName(getFile(MasterOrSelf(omod))) + ' - ' + EditorID(omod) + ' '+ IntToHex(GetLoadOrderFormID(omod), 8) + ' *****');
+    
+    //Add the paintjob to the stored paintjob lists for the various factions
+    for i := 0 to listMaster.count -1 do begin
+        faction := listMaster.objects[i];
+        logg(1, 'evaluating faction ' + faction[fact_name]);
+        if isRecordFiltered(omod, faction.objects[fact_filter_paint]) then begin
+            faction.objects[fact_paintjobs].addObject(IntToHex(GetLoadOrderFormID(omod), 8), omod);
+            logg(3, 'FOUND MATCHING - Faction= ' + faction[fact_name] + ' paintjob= ' + editorId(omod));
+        end 
+        else logg(1, 'nonmatching: Faction= ' + faction[fact_name] + ' paintjob= ' + editorId(omod));
+    
+    end;
+
+    //TODO - remove LNAM from OMOD configuration
+
+    //TODO - process cobj
+        //Crafting Recipe Standardization, Special Component?
+        //Recipe Locking: Faction? Magazine?
+    
+end;
+
 //============================================================================
 function evalLVLI(lvli: IInterface): boolean;
 var
-    i, j: integer;
+    i: integer;
     faction : TStringList;
 begin
     result := false;
+    addMessage('***** Evaluating ' + getFileName(getFile(lvli)) + ' - ' + EditorID(lvli) + ' '+ IntToHex(GetLoadOrderFormID(lvli), 8) + ' *****');
     if (winningRefByCount(lvli) < 1) then exit; //skip unused levelled lists
     if hasFactionKeyword(lvli) then exit; //If a lvli already has a filter keyword, skip it
+    if not isRecordFiltered(lvli, filter_eval_lvli) then exit;
     
     //If the editorID contains one of the faction search terms, then flag it for patching.
-    for i := 0 to factions.count-1 do begin
-        faction := factions.objects[i];
-        result := isFiltered(lvli, faction.objects[fact_filter_lvli]);
+    for i := 0 to listFactions.count-1 do begin
+        faction := listFactions.objects[i];
+        result := isRecordFiltered(lvli, faction.objects[fact_filter_lvli]);
         if (result) then exit;
     end;
     
@@ -156,36 +284,31 @@ end;
 function evalItem(item: IInterface): boolean;
 var
     sig: string;
-    countFaction, countmaster, countPaintjobs: integer;
-    master, faction, paintjobs: TStringList;
+    countmaster, countPaintjobs: integer;
+    faction, paintjobs: TStringList;
     paintjob : IInterface;
     
 begin
     //filter out non playable and unused
     result := false;
     if (getElementEditValues(item, 'Record Header\record flags\Non-Playable') = '1') then exit; //skip unplayable items
+    if not assigned(ElementByPath(item, 'Object Template\Combinations')) then exit; //skip items completely missing templates
     if (winningRefByCount(item) < 1) then exit; //skip unused items
-
+    if not isRecordFiltered(item, filter_eval_item) then exit;
     sig := signature(item);
     
-    addMessage('***** Evaluating '+ EditorID(item) + ' '+ IntToHex(GetLoadOrderFormID(item), 8) + ' *****');
+    addMessage('***** Evaluating '+ getFileName(getFile(item)) + ' - ' + EditorID(item) + ' '+ IntToHex(GetLoadOrderFormID(item), 8) + ' *****');
     //true exit conditions
     result := true;
     
-    //if it has the standard paint APs
-    if hasPaintjobAP(item) then exit;
-    
     //Check for a compatible paint job
-    for countMaster := 0 to masterList.count -1 do begin
-        master := masterList.objects[countMaster];
-        for countFaction := 0 to master.count-1 do begin
-            faction := master.objects[countFaction];
-            paintjobs := faction.objects[fact_paintjobs];
-            for countPaintjobs := 0 to paintjobs.count-1 do begin
-                paintJob := ObjectToElement(paintJobs.objects[countPaintjobs]);
-                if isPaintjobCompatibleKeyword(paintjob, item) then exit;
-                if isPaintjobCompatibleMatswap(paintjob, item) then exit;
-            end;
+    for countMaster := 0 to listMaster.count -1 do begin
+        faction := listMaster.objects[countMaster];
+        paintjobs := faction.objects[fact_paintjobs];
+        for countPaintjobs := 0 to paintjobs.count-1 do begin
+            paintJob := ObjectToElement(paintJobs.objects[countPaintjobs]);
+            if isPaintjobCompatibleKeyword(paintjob, item) then exit;
+            if isPaintjobCompatibleMatswap(paintjob, item) then exit;
         end;
     end;
 
@@ -197,144 +320,310 @@ end;
 function processLVLI(lvli: IInterface): boolean;
 var
     i : integer;
-    filters, entry: IInterface;
     faction: TStringList;
 begin
     addMessage('***** Processing '+ EditorID(lvli) + ' '+ IntToHex(GetLoadOrderFormID(lvli), 8) + ' *****');
     //If the editorID contains one of the faction search terms, then flag it for patching.
-    for i := 0 to factions.count-1 do begin
-        faction := factions.objects[i];
+    for i := 0 to listFactions.count-1 do begin
+        faction := listFactions.objects[i];
         //skip to next if
-        if not isFiltered(lvli, faction.objects[fact_filter_lvli]) then continue;
+        if not isRecordFiltered(lvli, faction.objects[fact_filter_lvli]) then continue;
         addFilterKeywordToLVLI(lvli, faction[fact_kywd]);
         exit;
     end;
+
+    //TODO Add Epic Keyword to "CustomItem_DoNotPlaceDirectly", "Aspiration"
 end;
 //============================================================================
-function processItem(item: IInterface): boolean;
+procedure processItem(item: IInterface);
 var
-    
-    modcols, skipFactions, master, faction, paintjobs, factionModcols, defaultModcols: TStringList;
-    paintJob, entry, ap, mnam, template, templates, listKwds, newKeyword, listmods, addmod, modID, flag, addIndex, oldentry, faction_ap_modcol, temp: IInterface;
-    modcolEdid, sig: string;
-    isCompatible, hasFactionTemplates : boolean;
-    i, countPaintjob, countFaction, countFilter, countTemplate, countMaster, countAP, countModcol, api, addonIndex, countPaintjobs, indexAp, factionIndex, indexDefault, indexEpic : integer;
+    faction, listAp_listCompatiblePaintjobs, listApprModcol: TStringList;
+    countFaction, i : integer;
 
 begin
     addMessage('***** Processing '+ EditorID(item) + ' '+ IntToHex(GetLoadOrderFormID(item), 8) + ' *****');
-    sig := signature(item);
-    skipFactions := TStringList.create;
-    hasFactionTemplates := generateFactionTemplate(item);
-    modcols := TStringList.create; //map<faction, map<AP, modcol>>, modcols are item specific
 
-    templates := ElementByPath(item, 'Object Template\Combinations');
+    //generate Default, and apply
+    faction := getItemDefaultFaction(item);
+    if assigned(faction) then begin 
+        listAp_listCompatiblePaintjobs := getCompatiblePaintjobs(item, faction);
+        listApprModcol := getFactionModcols(faction, listAp_listCompatiblePaintjobs);
+        applyDefaultModcols(item, faction, listApprModcol);
+        for i := 0 to listAp_listCompatiblePaintjobs.count-1 do listAp_listCompatiblePaintjobs.objects[i].free;
+        listAp_listCompatiblePaintjobs.free;
+        listApprModcol.free;
+    end
+    else logg(4, 'No default faction found for ' + editorId(item));
+    
+    //generate Epic, and apply
+    faction := getItemEpicFaction(item);
+    if assigned(faction) then begin 
+        listAp_listCompatiblePaintjobs := getCompatiblePaintjobs(item, faction);
+        listApprModcol := getFactionModcols(faction, listAp_listCompatiblePaintjobs);
+        applyFactionModcols(item, faction, listApprModcol);
+        for i := 0 to listAp_listCompatiblePaintjobs.count-1 do listAp_listCompatiblePaintjobs.objects[i].free;
+        listAp_listCompatiblePaintjobs.free;
+        listApprModcol.free;
+    end
+    else logg(4, 'No epic faction found for ' + editorId(item));
 
-    //iterate paintjobs
-    //Build the paintjob modcols, and add missing keywords
-    for countMaster := 0 to masterList.count -1 do begin
-        master := masterList.objects[countMaster];
-        for countFaction := 0 to master.count-1 do begin
-            faction := master.objects[countFaction];
-            paintjobs := faction.objects[fact_paintjobs];
-            
-            //skip faction modcol generation if it's a faction (not default or epic) the item already has a template for it
-            logg(1, 'checking ' + faction[fact_name]);
-            if (faction[fact_name] <> 'Default') AND (faction[fact_name] <> 'Epic') and itemAlreadyHasTemplatesForFaction(item, faction) then continue;
-            
-            factionModcols := TStringList.create;
-            
-            //todo - filter item based on faction -> continue
-            if (paintjobs.count = 0) then logg(1, 'No paintjobs found for ' + faction[fact_name]);
-            for countPaintjobs := 0 to paintjobs.count-1 do begin
-                paintJob := ObjectToElement(paintJobs.objects[countPaintjobs]);
-                isCompatible := false;
-                ap := linksTo(elementByPath(paintjob, 'DATA\Attach Point'));
-                //grab the paintjob specific keyword from the filter keywords
-                mnam := getPainjobMnam(paintjob);
-                logg(1, 'evaluating paintjob: ' + editorId(paintjob) + ' AP: ' + editorId(ap) + ' Generic Paint MNAM: ' + editorId(mnam));
-
-                //Build paintjob modcols: check for compatibility, by keywords then by matSwap
-                if isPaintjobCompatibleKeyword(paintJob, item) then isCompatible := true
-                else if isPaintjobCompatibleMatswap(paintJob, item) then begin
-                    if isGenericPaintKeyword(mnam) then begin
-                        logg(3, 'Adding missing keyword:AP :    ' + editorId(mnam) + ':' + editorId(ap));
-                        isCompatible := true;//check if it's a known generic paintjob keyword
-                        addMissingKywdAp(mnam, ap, item);
-                    end else logg(4, 'SKIPPING: Found compatible mat swap, but unrecognized material keyword: ' + editorId(mnam));
-                end;
-                if not isCompatible then continue;
-                //Add to Modcols
-                
-                //get or generate new modcol
-                indexAP := factionModcols.indexOf(editorId(ap));
-                if (indexAP < 0) then begin
-                    logg(2, 'Generating faction modcol for ' + faction[fact_name] +  '_' + editorId(ap));
-                    modcolEdid := 'modcol_'+ editorId(item) + '_' + editorId(mnam) + '_' + editorId(ap) + '_' + faction[fact_name];
-                    faction_ap_modcol := wbCopyElementToFile(template_modcol, mxPatchFile, true, true);
-                    factionModcols.addObject(editorId(ap), faction_ap_modcol);
-                    indexAP := factionModcols.count-1;
-                    SetElementEditValues(faction_ap_modcol, 'EDID', modcolEdid);
-                    SetEditValue(ElementByPath(faction_ap_modcol, 'DATA\Attach Point'), IntToHex(GetLoadOrderFormID(ap), 8));
-                end else faction_ap_modcol := factionModcols.objects[indexAp];
-                
-                //add the paintjob to the modcol
-                if isFiltered(paintjob, faction.objects[fact_filter_paint]) then begin
-                    logg(2, 'Found Paintjob: ' + editorId(paintjob) + ' for faction ' + faction[fact_name] + ' on AP ' + editorId(ap));
-                    entry := ElementAssign(ElementByPath(faction_ap_modcol, 'DATA\Includes'), HighInteger, nil, False);
-                    setElementEditValues(entry, 'Mod', IntToHex(GetLoadOrderFormID(paintjob), 8));
-                end;
-            end;
-            //if any modcols were created, then store the list for addition to items, otherwise discard
-            if (factionModcols.count > 0) then modcols.addObject(faction[fact_name], factionModcols) else factionModcols.free;
-        end;    
+    //generate Standard Factions, and apply
+    for countFaction := 0 to listFactions.count-1 do begin
+        faction := listFactions.objects[countFaction];
+        logg(1, 'Faction: ' + faction[fact_name]);
+        if not isRecordFiltered(item, faction.objects[fact_filter_item]) then begin
+            logg(1, 'Failed faction item filter, skipping');
+            continue;
+        end;
+        listAp_listCompatiblePaintjobs := getCompatiblePaintjobs(item, faction);
+        listApprModcol := getFactionModcols(faction, listAp_listCompatiblePaintjobs);
+        applyFactionModcols(item, faction, listApprModcol);
+        for i := 0 to listAp_listCompatiblePaintjobs.count-1 do listAp_listCompatiblePaintjobs.objects[i].free;
+        listAp_listCompatiblePaintjobs.free;
+        listApprModcol.free;
     end;
 
-    //add faction modcols to weap/armo
-    //iterate through the templates
-    indexEpic := modcols.indexOf('Epic');
-    for countTemplate := 0 to ElementCount(templates)-1 do Begin
-		logg(1, editorId(item) + ' - Examining template ' + IntToStr(countTemplate));
-		oldentry := ElementByIndex(templates, countTemplate);
-		addonIndex := StrToInt(GetElementEditValues(oldentry, 'OBTS\Parent Combination Index'));
-        
-        //If it's a basic template, ie not already has a qualifier like faction
-        if addonIndex = -1 then begin
-			logg(1, 'Found basic template');
-			
-            //add the default modcol standard templates
-			indexDefault := modcols.indexOf('Default');
-            if indexDefault > -1 then begin
-                defaultModcols := modcols.objects[indexDefault];
-                for countAP := 0 to defaultModcols.count-1 do begin 
-                    addModcolToExistingTemplate(oldentry, ObjectToElement(defaultModcols.objects[countAp]));
-                end;
-            end;
+    if hasKwda(item, 'ArmorTypePower') then begin
+        //generate Default PA Sets, and apply
+        for countFaction := 0 to listDefaultPaSets.count-1 do begin
+            faction := listDefaultPaSets.objects[countFaction];
+            if not isRecordFiltered(item, faction.objects[fact_filter_item]) then continue;
+            listAp_listCompatiblePaintjobs := getCompatiblePaintjobs(item, faction);
+            listApprModcol := getFactionModcols(faction, listAp_listCompatiblePaintjobs);
+            applyFactionModcols(item, faction, listApprModcol);
+            for i := 0 to listAp_listCompatiblePaintjobs.count-1 do listAp_listCompatiblePaintjobs.objects[i].free;
+            listAp_listCompatiblePaintjobs.free;
+            listApprModcol.free;
+        end;
+        //generate Epic PA Sets, and apply
+        for countFaction := 0 to listEpicPaSets.count-1 do begin
+            faction := listEpicPaSets.objects[countFaction];
+            if not isRecordFiltered(item, faction.objects[fact_filter_item]) then continue;
+            listAp_listCompatiblePaintjobs := getCompatiblePaintjobs(item, faction);
+            listApprModcol := getFactionModcols(faction, listAp_listCompatiblePaintjobs);
+            applyFactionModcols(item, faction, listApprModcol);
+            for i := 0 to listAp_listCompatiblePaintjobs.count-1 do listAp_listCompatiblePaintjobs.objects[i].free;
+            listAp_listCompatiblePaintjobs.free;
+            listApprModcol.free;
+        end;
+    end;
     
-			//if it's clothing, only do default TODO (and maybe add epic too?)
-			if hasFactionTemplates then continue;
-            
-            //here we iterate through the generated modcols keywords, and generate templates for each
-            for countModcol := 0 to modcols.count-1 do begin
-                factionName := modcols[countModcol];
-                if (factionName = 'Default') or (factionName = 'Epic') then continue;
-                faction := getFaction(factionName);
-                generateFactionVersionOfTemplate(item, faction, modcols.objects[countModcol], countTemplate);
-			end;
-		end
-        else begin //(else) it's a template based on a pre-existing template
-            logg(1, 'Found pre-existing non-default template ' + IntToStr(countTemplate));
-			//if it's epic, add epic, otherwise do nothing
-            if getLoadOrderFormId(LinksTo(elementByIndex(ElementByPath(oldentry, 'OBTS\Keywords'), 0))) = getLoadOrderFormId(ObjectToElement(epicFaction.objects[fact_kywd])) 
-            AND (indexEpic > -1) then begin
-                for countAP := 0 to modcols.objects[indexEpic].count-1 do begin 
-                    addModcolToExistingTemplate(oldentry, ObjectToElement(modcols.objects[indexEpic].objects[countAp]));
-                end;
-            end;
-		end;
+end;
 
-	end;
-    for i := 0 to modcols.count-1 do modcols.objects[i].free;
-    modcols.free;
+//============================================================================
+procedure applyDefaultModcols(item: IInterface; faction, listApprModcol: TStringList);
+var
+    countTemplate, countAp, parentIndex: integer;
+    templates, template, modcol: IInterface;
+begin
+    if (listApprModcol.count = 0) then begin
+        logg(5, 'applyDefaultModcols: listApprModcol.count = 0');
+        exit;
+    end;
+    
+    templates := ElementByPath(item, 'Object Template\Combinations');
+    for countTemplate := 0 to ElementCount(templates)-1 do Begin
+		template := ElementByIndex(templates, countTemplate);
+		parentIndex := StrToInt(GetElementEditValues(template, 'OBTS\Parent Combination Index'));
+        
+        if (parentIndex <> -1) then exit;  //once we hit non-standard templates, we can stop iterating
+		
+        for countAp := 0 to listApprModcol.count-1 do begin 
+            modcol := ObjectToElement(listApprModcol.objects[countAp]);
+            addModcolToExistingTemplate(template, modcol);
+        end;
+    end;
+            
+end;
+
+//============================================================================
+procedure applyFactionModcols(item: IInterface; faction, listApprModcol: TStringList);
+var
+    countTemplate, countAlt, countAp, parentIndex: integer;
+    templates, template: IInterface;
+    kwdaFormId : cardinal;
+    hasFactionTemplate : boolean;
+begin
+    if (listApprModcol.count = 0) then begin
+        logg(5, 'applyFactionModcols: listApprModcol.count = 0');
+        exit;
+    end;
+
+    //if already has faction, then enrich, ELSE create version for each default
+    hasFactionTemplate := false;
+    templates := ElementByPath(item, 'Object Template\Combinations');
+    for countTemplate := 0 to ElementCount(templates)-1 do Begin
+        template := ElementByIndex(templates, countTemplate);
+        kwdaFormId := GetLoadOrderFormID(linksTo(elementByIndex(ElementByPath(template, 'OBTS\Keywords'), 0)));
+        
+        //check main keyword
+        if kwdaFormId = getLoadOrderFormId(objectToElement(faction.objects[fact_kywd])) then begin
+            hasFactionTemplate := true;
+            for countAp := 0 to listApprModcol.count-1 do addModcolToExistingTemplate(template, objectToElement(listApprModcol.objects[countAp]));            
+        end;
+        //check alt keywords
+        for countAlt := 0 to faction.objects[fact_alt_kywds].count-1 do begin
+            if kwdaFormId = getLoadOrderFormId(ObjectToElement(faction.objects[fact_alt_kywds].objects[countAlt])) then begin
+                hasFactionTemplate := true;
+                for countAp := 0 to listApprModcol.count-1 do addModcolToExistingTemplate(template, objectToElement(listApprModcol.objects[countAp]));            
+            end;
+        end;
+    end;
+		
+    if hasFactionTemplate then exit;
+
+    for countTemplate := 0 to ElementCount(templates)-1 do Begin
+        template := ElementByIndex(templates, countTemplate);
+        parentIndex := StrToInt(GetElementEditValues(template, 'OBTS\Parent Combination Index'));
+        if (parentIndex <> -1) then exit; //If we've hit the non-basic templates, then we're done.
+        generateFactionVersionOfTemplate(item, faction, listApprModcol, parentIndex);
+    end;
+            
+end;
+
+//============================================================================  
+procedure generateFactionVersionOfTemplate(item: IInterface; faction, listApprModcol: TStringList; parentIndex: integer);
+var
+    entry, newKeyword, listmods, addmod, modID, modcol : IInterface;
+    i: integer;
+begin
+    //Add faction copies of this template for each registered faction modcol
+    logg(1, 'Generating faction version of template ' + intToStr(parentIndex));
+    //create the new template
+    entry := ElementAssign(ElementByPath(item, 'Object Template\Combinations'), HighInteger, nil, False);
+    newKeyword := ElementAssign(ElementByPath(entry, 'OBTS\Keywords'), HighInteger, nil, False);
+    setElementEditValues(entry, 'OBTS\Parent Combination Index', parentIndex); 
+    setEditValue(newKeyword, faction[fact_kywd]);
+    setElementEditValues(entry, 'FULL', faction[fact_name]);
+    listmods := ElementByPath(entry, 'OBTS\Includes');
+
+    //iterate through the attachment points, adding the fact mods for all the attachment points to the template for the faction
+    for i := 0 to listApprModcol.count-1 do Begin
+        addmod := ElementAssign(listmods, HighInteger, nil, False);
+        modID := ElementByPath(addmod, 'Mod');
+        modcol := ObjectToElement(listApprModcol.objects[i]);
+        logg(1, 'adding modcol : ' + editorId(modcol));
+        
+        SetEditValue(modID, IntToHex(getLoadOrderFormId(modcol), 8));
+        SetEditValue(ElementByPath(addmod, 'Don''t Use All'), 'True');
+    end;
+end;
+//============================================================================
+//Returns a TStringList map of <AP, PaintjobList>
+function getCompatiblePaintjobs(item: IInterface; faction: TStringList): TStringList;
+var
+    paintjobs, paintjobsForAP: TStringList;
+    paintJob, ap, mnam: IInterface;
+    apIndex, countPaintjobs, i : integer;
+    isCompatible : boolean;
+begin
+    result := TStringList.create;
+    paintjobs := faction.objects[fact_paintjobs];
+            
+    if (paintjobs.count = 0) then logg(1, 'No paintjobs found for ' + faction[fact_name]);
+    for countPaintjobs := 0 to paintjobs.count-1 do begin
+        paintJob := ObjectToElement(paintJobs.objects[countPaintjobs]);
+        isCompatible := false;
+        ap := linksTo(elementByPath(paintjob, 'DATA\Attach Point'));
+        mnam := getPaintjobMnam(paintjob);
+        
+        //Build paintjob modcols: check for compatibility, by keywords then by matSwap
+        if isPaintjobCompatibleKeyword(paintJob, item) then begin
+            isCompatible := true
+            //TODO - add this as a configurable option?
+            //if not isPaintjobCompatibleMatswap(paintJob, item) then logg(5, 'Found paintjob with compatible keywords but no compatible MatSwaps for applicable item: ' + editorID(paintjob) + ', ' + editorId(item))
+        end
+        else if isPaintjobCompatibleMatswap(paintJob, item) then begin
+            if isRecordFiltered(mnam, filter_paintjob_kywd) then begin
+                logg(3, 'Adding missing keyword:AP :    ' + editorId(mnam) + ':' + editorId(ap));
+                isCompatible := true;//check if it's a known generic paintjob keyword
+                addMissingKywdAp(mnam, ap, item);
+            end else logg(4, 'SKIPPING: Found compatible mat swap, but unrecognized material keyword: ' + editorId(mnam));
+        end;
+        
+        //continue if not compatible
+        if not isCompatible then continue;
+        
+        apIndex := result.indexOf(EditorId(ap));
+        if (apIndex > -1) then paintjobsForAP := result.Objects[apIndex]
+        else begin 
+            paintjobsForAP := TStringList.create;
+            result.addObject(editorId(ap), paintjobsForAP);
+        end;
+        paintjobsForAP.addObject(editorId(paintjob), paintjob);
+        
+    end;
+    logg(1, faction[fact_name] + ': Num APs: ' + intToStr(result.count));
+    for i := 0 to result.count-1 do logg(1, 'AP: ' + result[i] + ' numPaintjobs: ' + intToStr(result.objects[i].count));
+
+end;
+
+//============================================================================
+//Converts a list<Ap, listAllFactionFilteredPaintjobs> to a list <AP, modcol>>
+function getFactionModcols(faction, listAp_listCompatiblePaintjobs: TStringList): TStringList;
+var
+    ap, modcol, paintjob, entry: IInterface;
+    mnamEdids, listCompatiblePaintjobs: TStringList;
+    modcolEdid : String;
+    paintjobCount, apCount: integer;
+
+begin
+    result := TStringList.create;
+    
+    for apCount := 0 to listAp_listCompatiblePaintjobs.count-1 do begin
+        listCompatiblePaintjobs := listAp_listCompatiblePaintjobs.objects[apCount];
+        ap := linksTo(elementByPath(ObjectToElement(listCompatiblePaintjobs.objects[0]), 'DATA\Attach Point'));
+        logg(1, 'getFactionmodcols - ' + faction[fact_name] + ': '  + editorId(ap) + ', num paintjobs=' + intToStr(listCompatiblePaintjobs.count));
+        mnamEdids := concatMnams(listCompatiblePaintjobs);
+        modcolEdid := 'modcol_'+ '_' + mnamEdids + '_' + editorId(ap) + '_' + faction[fact_name];
+        modcol := MainRecordByEditorID(GroupBySignature(mxPatchFile, 'OMOD'), modcolEdid);
+        
+        //If the modcol already exists, then I don't need to do anything else, it's already correctly populated with the same filter output
+        if assigned(modcol) then begin
+            logg(1, 'Modcol already exists: ' + modcolEdid);
+            
+        end else begin //create it new
+        
+            modcol := wbCopyElementToFile(template_modcol, mxPatchFile, true, true);
+            SetElementEditValues(modcol, 'EDID', modcolEdid);
+            SetElementEditValues(modcol, 'FULL', faction[fact_name]);
+            SetEditValue(ElementByPath(modcol, 'DATA\Attach Point'), IntToHex(GetLoadOrderFormID(ap), 8));
+            
+            //add each paintjob to the modcol
+            for paintjobCount := 0 to listCompatiblePaintjobs.count-1 do begin
+                paintjob := ObjectToElement(listCompatiblePaintjobs.objects[paintjobCount]);
+                if paintjobCount = 0 then entry := ElementByIndex(ElementByPath(modcol, 'DATA\Includes'), 0)
+                else entry := ElementAssign(ElementByPath(modcol, 'DATA\Includes'), HighInteger, nil, False);
+                setElementEditValues(entry, 'Mod', IntToHex(GetLoadOrderFormID(paintjob), 8));
+            end;
+            
+        end;
+        //add the ap specific modcol to the modcol map
+        result.addObject(editorId(ap), modcol);
+    end;
+
+end;
+
+//============================================================================
+function concatMnams(paintjobs:tstringlist): String;
+var
+    mnams : TStringList;
+    paintjob: IInterface;
+    mnam: string;
+    i, j: integer;
+begin
+    mnams := TStringList.create;
+    mnams.Delimiter := '-';
+    for i := 0 to paintjobs.count-1 do begin
+        paintjob := ObjectToElement(paintjobs.objects[i]);
+        for j := 0 to elementCount(ElementByPath(paintjob, 'MNAM'))-1 do begin
+            mnam := editorId(LinksTo(ElementByIndex(ElementByPath(paintjob, 'MNAM'), j)));
+            if mnams.indexOf(mnam) > -1 then continue;
+            mnams.add(mnam);
+        end;
+    end;
+    result := mnams.DelimitedText;
+    mnams.Free;
 end;
 
 //============================================================================
@@ -349,27 +638,20 @@ begin
     
     items := elementByPath(furn, 'Items');
     if not assigned(items) then exit; //if it's an empty frame, skip it
-    
-    //skip specific suits
-    if containsText(editorId(furn), 'abraxo') then exit;
-    if containsText(editorId(furn), 'sugar') then exit;
-    if containsText(editorId(furn), 'danse') then exit;
-    if containsText(editorId(furn), 'armorvim') then exit;
-    if containsText(editorId(furn), 'nukacola') then exit;
-    if containsText(editorId(furn), 'quantum') then exit;
-    if containsText(editorId(furn), 'tesla') then exit;
-    if containsText(editorId(furn), 'decap') then exit;
-    if containsText(editorId(furn), 'NoStealCore') then exit; //Proctor Ingram
 
+    if not isRecordFiltered(furn, filter_eval_furn) then exit;
+
+    addMessage('***** Evaluating '+ getFileName(getFile(furn)) + ' - ' + EditorID(furn) + ' '+ IntToHex(GetLoadOrderFormID(furn), 8) + ' *****');
+    
     for i := 0 to elementCount(items)-1 do begin
         lvli := linksTo(ElementByPath(elementByIndex(items, i), 'CNTO\Item'));
         logg(1, 'Examining ' + editorId(lvli));
         if containsText(editorId(lvli), 'fusioncore') then continue;//skip analysis of fusion cores
         
-        //If a lvli is already flagged for patching, skip it 
+        //If a lvli is already flagged for patching, then false 
         if getFileName(getFile(lvli)) = getFileName(mxPatchFile) then exit; 
         
-        //If a lvli is already has a faction keyword, then skip it
+        //If a lvli already has a faction keyword, then false
         if hasFactionKeyword(lvli) then exit;
         
     end;
@@ -395,9 +677,6 @@ begin
     secondItem := elementByPath(elementByIndex(items, 1), 'CNTO\Item');
     if (elementCount(items) > 1) AND (not assigned(secondItem)) then raise Exception.Create('**ERROR** failed to assign second item');
 
-    logg(1, '1st item= ' +editorId(linksTo(firstItem)));
-    logg(1, '2nd item= ' +editorId(linksTo(secondItem)));
-
     //Look at the items - if individual pieces instead of suit, copy to lvli
         //create a new armor set list that has those individual pieces, replace in items
         //else grab the existing set lvli
@@ -410,9 +689,9 @@ begin
     if signature(lvli) <> 'LVLI' then exit;
 
     //If based on the name, this is a faction pa suit, (but the levelled lists aren't faction specific)
-    for countFact := 0 to factions.count-1 do begin
-        if isFiltered(furn,  factions.objects[countFact].objects[fact_filter_lvli]) OR isFiltered(lvli,  factions.objects[countFact].objects[fact_filter_lvli]) then begin
-            faction := factions.objects[countFact];
+    for countFact := 0 to listFactions.count-1 do begin
+        if isRecordFiltered(furn, listFactions.objects[countFact].objects[fact_filter_lvli]) OR isRecordFiltered(lvli, listFactions.objects[countFact].objects[fact_filter_lvli]) then begin
+            faction := listFactions.objects[countFact];
             logg(3, 'Found faction PA Set: ' + editorId(furn));
             break;
         end;
@@ -425,13 +704,17 @@ begin
             lvli := wbCopyElementToFile(lvli, mxPatchFile, true, true);
             setElementEditValues(lvli, 'EDID', editorId(lvli) + '_' + faction[fact_name]);
             addFilterKeywordToLVLI(lvli, faction[fact_kywd]);
+            
+            if containsText(editorId(linksTo(firstItem)), 'fusionCore') 
+                    then setEditValue(secondItem, IntToHex(GetLoadOrderFormID(lvli), 8))
+                    else setEditValue(firstItem, IntToHex(GetLoadOrderFormID(lvli), 8));
         end;
     end
     //ELSE if it is a default set
     else begin
         //iterate PA default paintjobs
         
-        if winningRefByCount(furn) > 1 then paSets := defaultPaSets else paSets := epicPaSets;
+        if winningRefByCount(furn) > 1 then paSets := listDefaultPaSets else paSets := listEpicPaSets;
         
         for countSet := 0 to paSets.count-1 do begin
             //If list isn't compatible, skip it
@@ -513,25 +796,33 @@ begin
 end;
 
 //============================================================================
-function processCOBJ(cobj: IInterface): boolean;
-var
-    i : integer;
-begin
-    //TODO - process cobj
-    //Painjobs are processed by OMOD, I should probably handle OMOD from COBJ and do it as a pair
-        //That way, I have access to the faction results for the paintjob
-end;
-
-//============================================================================
 // Configuration
 //============================================================================
+procedure initConfig();
 
-procedure initConfigFiles();
+begin
+    logg(1, 'Loading Config.ini');
+    config_options := TMemIniFile.Create('Edit Scripts\FactionPaintjobs\Config.ini');
+    filter_paintjob_ap := getConfigList(config_options, 'Config', 'filter_paintjob_ap');
+    logg(1, 'Filter Paintjob AP list size = ' + intToStr(filter_paintjob_ap.count));
+    filter_paintjob_kywd := getConfigList(config_options, 'Config', 'filter_paintjob_kywd');
+    logg(1, 'Filter Paintjob KYWD list size = ' + intToStr(filter_paintjob_ap.count));
+    filter_allow_redistribute := getConfigList(config_options, 'Config', 'filter_allow_redistribute');
+    filter_eval_furn := getConfigList(config_options, 'Config', 'filter_eval_furn');
+    filter_eval_item := getConfigList(config_options, 'Config', 'filter_eval_item');
+    filter_eval_lvli := getConfigList(config_options, 'Config', 'filter_eval_lvli');
+    filter_eval_omod := getConfigList(config_options, 'Config', 'filter_eval_omod');
+    
+
+end;
+
+//================
+procedure initFactions();
 var
   i, j, p : integer;
-  keywordString, filename : String;
+  keywordString, filename, section : String;
   keyword : IInterface;
-  configFactions, factionValues, filterValues, temp : TStringList;
+  tempFactions, factionValues, filterValues, temp : TStringList;
 
 const
     ini_kywd = 'keyword';
@@ -541,42 +832,52 @@ const
     ini_isEpicPa = 'is_epic_pa';
     ini_filter_lvli = 'filter_lvli';
     ini_filter_paint = 'filter_paintjob';   
+    ini_filter_item = 'filter_item';
+    ini_is_default = 'is_default';
+    ini_is_epic = 'is_epic';
 
 begin
-    logg(1, 'Loading Config Ini');
-    config := TMemIniFile.Create('Edit Scripts\FactionPaintjobs\Factions.ini');
-    factions := TStringList.create;
-    defaultPaSets := TStringList.create;
-    epicPaSets := TStringList.create;
-    configFactions := TStringList.create;
-    config.readSections(configFactions);
+    logg(1, 'Loading Factions.ini');
+    config_factions := TMemIniFile.Create('Edit Scripts\FactionPaintjobs\Factions.ini');
+    
+    listMaster := TStringList.create;
+    listFactions := TStringList.create;
+    listDefaultFactions := TStringList.create;
+    listEpicFactions := TStringList.create;
+    listDefaultPaSets := TStringList.create;
+    listEpicPaSets := TStringList.create;
+    
+    tempFactions := TStringList.create;
+    config_factions.readSections(tempFactions);
     //iterate the configured factions
-    for i := 0 to configFactions.count-1 do begin
-        logg(1, 'Loading faction config: ' + configFactions[i]);
-        //todo - if is default/epic Power Armor configuration, store seperately
+    for i := 0 to tempFactions.count-1 do begin
+        logg(1, 'Loading faction config: ' + tempFactions[i]);
+        section := tempFactions[i];
         
-        //If this is the default or epic, assign it to their standalone variable, else add it to the factions list
+        //Create the faction TStringList, add it to the master faction list, and whatever sub-lists it's configured for
         factionValues := TStringList.create;
-        if (configFactions[i] = 'Default') then defaultFaction := factionValues
-        else if (configFactions[i] = 'Epic') then epicFaction := factionValues
-        else if(config.readString(configFactions[i], ini_isDefaultPA, '') = 'true') then defaultPaSets.addObject(configFactions[i], factionValues)
-        else if(config.readString(configFactions[i], ini_isEpicPA, '') = 'true') then epicPaSets.addObject(configFactions[i], factionValues)
-        else factions.addObject(configFactions[i], factionValues);
+        listMaster.addObject(tempFactions[i], factionValues);
+        if (config_factions.readString(tempFactions[i], ini_is_default, '') = 'true') then listDefaultFactions.addObject(section, factionValues)
+        else if (config_factions.readString(tempFactions[i], ini_is_epic, '') = 'true') then listEpicFactions.addObject(section, factionValues)
+        else if (config_factions.readString(tempFactions[i], ini_isDefaultPA, '') = 'true') then listDefaultPaSets.addObject(tempFactions[i], factionValues)
+        else if (config_factions.readString(tempFactions[i], ini_isEpicPA, '') = 'true') then listEpicPaSets.addObject(tempFactions[i], factionValues)
+        else listFactions.addObject(tempFactions[i], factionValues);
 
         
         //index 0, Faction Name
         fact_name := 0;
-        factionValues.addObject(configFactions[i], configFactions[i]);
+        factionValues.addObject(tempFactions[i], tempFactions[i]);
 
         //index 1, the formID for the keyword
         fact_kywd := 1;
-        keyword := generateFactionKeyword(configFactions[i], config.readString(configFactions[i], ini_kywd, ''));
-        factionValues.addObject(intToHex(GetLoadOrderFormID(keyword), 8), keyword);
 
+        keyword := generateFactionKeyword(tempFactions[i], config_factions.readString(tempFactions[i], ini_kywd, ''));
+        factionValues.addObject(intToHex(GetLoadOrderFormID(keyword), 8), keyword);
+    
         //index 2, alt keywords
         //load formID + IINterface into the tstringlist
         fact_alt_kywds := 2;
-        temp := getConfigList(configFactions[i], ini_alt_keywords);
+        temp := getConfigList(config_factions, tempFactions[i], ini_alt_keywords);
         filterValues := TStringList.create;
         for j := 0 to temp.count -1 do begin
             p := Pos('|', temp[j]);
@@ -595,34 +896,29 @@ begin
 
         //index 4, the paintjob filter
         fact_filter_paint := 4;
-        factionValues.addObject(ini_filter_paint, getConfigList(configFactions[i], ini_filter_paint));
+        factionValues.addObject(ini_filter_paint, getConfigList(config_factions, tempFactions[i], ini_filter_paint));
+        logg(1, tempFactions[i] + ': filter_paintjob count =' + intToStr(factionValues.objects[fact_filter_paint].count));
         
         //index 5, the lvli filter
         fact_filter_lvli := 5;
-        factionValues.addObject(ini_filter_lvli, getConfigList(configFactions[i], ini_filter_lvli));
+        factionValues.addObject(ini_filter_lvli, getConfigList(config_factions, tempFactions[i], ini_filter_lvli));
+        logg(1, tempFactions[i] + ': filter_lvli count =' + intToStr(factionValues.objects[fact_filter_lvli].count));
 
-        //index, item filter
+        //index 6, the item filter
+        fact_filter_item := 6;
+        factionValues.addObject(ini_filter_item, getConfigList(config_factions, tempFactions[i], ini_filter_item));
+        logg(1, tempFactions[i] + ': filter_item count =' + intToStr(factionValues.objects[fact_filter_item].count));
 
     end;
-    logg(3, intToStr(configFactions.count) + ' Configurations loaded');
-    logg(3, intToStr(defaultPaSets.count) + ' Default PA Sets loaded');
-    logg(3, intToStr(epicPaSets.count) + ' Epic PA Sets loaded');
-    if assigned(defaultFaction) then logg(3, 'Default Faction Loaded') else logg(4, 'Missing default faction');
-    if assigned(epicFaction) then logg(3, 'Epic Faction Loaded') else logg(4, 'Missing epic faction');
-    configFactions.free;
-
-    nonFactionLists := TStringList.create;
-    nonFactionLists.addObject('default', defaultFaction);
-    nonFactionLists.addObject('epic', epicFaction);
-    
-    masterList := TStringList.create;
-    masterList.addObject('non-factions', nonFactionLists);
-    masterList.addObject('factions', factions);
-    masterList.addObject('default_pa', defaultPaSets);
-    masterList.addObject('epic_pa', epicPaSets);
+    logg(3, intToStr(tempFactions.count) + ' Configurations loaded');
+    logg(3, intToStr(listDefaultFactions.count) + ' Default Factions loaded');
+    logg(3, intToStr(listEpicFactions.count) + ' Epic Factions loaded');
+    logg(3, intToStr(listFactions.count) + ' Standard Factions loaded');
+    logg(3, intToStr(listDefaultPaSets.count) + ' Default PA Sets loaded');
+    logg(3, intToStr(listEpicPaSets.count) + ' Epic PA Sets loaded');
+    tempFactions.free;
 
 end;
-
 
 //=======
 function generateFactionKeyword(faction, keyword: String): IInterface;
@@ -633,11 +929,13 @@ var
 
 begin
     //get the override keyword, if present, eg: fallout4.esm|if_tmp_atomcats
+    logg(1, 'GenerateFactionKeyword: ' + keyword);
+    
     if (keyword <> '') then begin
         p := Pos('|', keyword);
         filename := Copy(keyword, 1, p-1);
         keyword := Copy(keyword, P+1, Length(keyword));
-        result :=MainRecordByEditorID(GroupBySignature(fileByName(filename), 'KYWD'), keyword);
+        result := MainRecordByEditorID(GroupBySignature(fileByName(filename), 'KYWD'), keyword);
         if not assigned(result) then raise Exception.create('** ERROR ** unable to find keyword ' + keyword + ' in file ' + filename);
         logg(1, 'Found override keyword: ' + filename + '|' + keyword + ' : ' + editorId(result));
     end
@@ -646,85 +944,152 @@ begin
         newKeyword := wbCopyElementToFile(template_keyword, mxPatchFile, true, true);
         setElementEditValues(newKeyword, 'EDID', 'if_tmp_' + faction);
         result := newKeyword;
+        if not assigned(result) then raise Exception.create('** ERROR **failed to generate faction keyword');
         logg(1, 'Generated faction keyword ' + editorId(newKeyword));
     end;
 end;
 
 //=======
-function getConfigList(faction, key: String): TStringList;
+function getConfigList(config: TMemIniFile; faction, key: String): TStringList;
 var
-    str: String;
+    str, prefix, suffix, filterString: String;
+    i, suffixPos: integer;
+    rawList, filter: TStringList;
 
 begin
     str := config.readString(faction, key, '');
-    str := StringReplace(str, ' ', '', [rfReplaceAll, rfIgnoreCase]);
+    str := trim(str);
     
+    rawList := TStringList.create;
+    rawList.Delimiter := ',';
+    rawList.DelimitedText := str;
+
     result := TStringList.create;
-    result.Delimiter := ',';
-    result.DelimitedText := str;
-    if (result.count < 1) then logg(4, 'Found empty faction filter: ' + faction + ' - ' +key);
-end;
-//=======
-function getFaction(factionName: String): TStringList;
-var
-    i, factIndex: Integer
-begin
-    for i: 0 to masterList.count-1 do begin
-        factIndex := masterlist.objects[i].indexOf(factionName);
-        if (i > 0) then result := factions.objects[i];
-        if assigned(result) then exit;
+    for i := 0 to rawList.count-1 do begin
+        
+        prefix := Copy(rawList[i], 1, 1);
+        if (prefix = '+') or (prefix = '-') or (prefix = '!') or (prefix = '#') then begin
+            filterString := Copy(rawList[i], 2, Length(rawList[i]) - 1);
+        end else begin
+            prefix := '';
+            filterString := rawList[i];
+        end;
+        suffixPos := pos(':', filterString);
+        if (suffixPos > 0) then begin
+            suffix := copy(filterString, suffixPos+1, length(filterString));
+            filterString := copy(filterString, 1, suffixPos-1);            
+        end else suffix := '';
+
+        filter := TStringList.create;
+        result.AddObject(rawList[i], filter);
+        filter.add(prefix);
+        filter.add(filterString);
+        filter.add(suffix);
+        
     end;
-    raise exception.create('**ERROR** Unable to find registered faction: ' + factionName);
+
+    if (result.count < 1) then logg(3, 'Found empty faction filter: ' + faction + ' - ' +key);
+    rawList.free;
+
 end;
+
 //============================================================================  
-function isFiltered(rec: IInterface; filterList: TStringList): boolean;
+function getItemDefaultFaction(item: IInterface): TStringList;
+var
+    i: integer;
+    faction: TStringList;
+begin
+    for i := 0 to listDefaultFactions.count-1 do begin
+        faction := listDefaultFactions.objects[i];
+        if isRecordFiltered(item, faction.objects[fact_filter_item]) then begin
+            //logg(1, 'Found default faction ' + faction[fact_name] + ' for item' + editorId(item));
+            result := faction;
+            exit;
+        end;
+    end;
+    logg(4, 'No default faction found for ' + editorId(item));
+end;
+
+//============================================================================  
+function getItemEpicFaction(item: IInterface): TStringList;
+var
+    i: integer;
+    faction: TStringList;
+begin
+    for i := 0 to listEpicFactions.count-1 do begin
+        faction := listEpicFactions.objects[i];
+        if isRecordFiltered(item, faction.objects[fact_filter_item]) then begin
+            //logg(1, 'Found epic faction ' + faction[fact_name] + ' for item' + editorId(item));
+            result := faction;
+            exit;
+        end;
+    end;
+    logg(4, 'No epic faction found for ' + editorId(item));
+end;
+
+//============================================================================  
+function isRecordFiltered(rec: String; filterList: TStringList): boolean;
 var
     countFilter: integer;
-    prefix, filterString: String;
+    value: String;
+    hasText : boolean;
+    filter : TStringList;
 begin
     result := false;
     
-    if not assigned(rec) then raise exception.create('**ERROR** Missing record');
-    if not assigned(filterList) then raise exception.create('**ERROR** Missing filter list');
+    //Paintjobs are filtered based on their FULL, the rest are filtered based on EDID
+    if signature(rec) = 'OMOD' then value := getElementEditValues(rec, 'FULL')
+    else value := editorId(rec);
 
+    if not assigned(filterList) then raise exception.create('**ERROR** Missing filter list');
     //iterate through the filter terms
     for countFilter := 0 to filterList.count-1 do begin
-
-        prefix := Copy(filterList[countFilter], 1, 1);
-        if (prefix = '+') or (prefix = '-') or (prefix = '!') then begin
-            filterString := Copy(filterList[countFilter], 2, Length(filterList[countFilter]) - 1);
-        end else begin
-            prefix := '';
-            filterString := filterList[countFilter];
-        end;
+        filter := filterList.objects[countFilter];
         
-        if (prefix = '+') then begin
-            //requires: if a rec DOESN'T have this, return false and exit
-            if not (containsText(editorId(rec), filterString) 
-            OR containsText(getElementEditValues(rec, 'FULL'), filterString)) then begin
+        if (filter[2] = '') then hasText := containsText(value, filter[1])
+        else if filter[1] = 'keyword' then hasText := hasKwda(rec, filter[2]) 
+        else if filter[1] = 'signature' then hasText := (signature(rec) = filter[2])
+        else raise exception.create('Unrecognized filter string with suffix :' + filter[1]);
+
+        if (filter[0] = '+') then begin
+            //requires: if DOESN'T have this, return false and exit
+            if not hasText then begin
+                //logg(1, 'filtering: missing + filter, returning false: ' + value + ' - ' +  filterString);
                 result := false;
                 exit;
             end;
-        end else if (prefix = '-') then begin
-            //Blacklist: If a rec has this, return false and exit
-            if (containsText(editorId(rec), filterString) 
-            OR containsText(getElementEditValues(rec, 'FULL'), filterString)) then begin
+        end else if (filter[0] = '-') then begin
+            //Blacklist: If has this, return false and exit
+            if hasText then begin
                 result := false;
                 exit;
             end;
-        end else if (prefix = '') then begin
-            //no prefix: terminal entry. If the rec has this filter keyword, then return true and exit
-            if containsText(editorId(rec), filterString) 
-            OR containsText(getElementEditValues(rec, 'FULL'), filterString) then begin
-                logg(2, 'rec meets filter criteria: ' + editorId(rec));
+        end else if (filter[0] = '') then begin
+            //no prefix: terminal entry. If has this filter keyword, then return true and exit
+            if hasText then begin
                 result := true;
                 exit;
             end;
-        end else raise Exception.Create('**ERROR** encountered unexpected filter prefix: ' + filterList[countFilter]);
+        end else if (filter[0] = '!') then begin
+            //accept all, useful if you're doing a bunch of negative filtering before it
+            result := true;
+            exit;
+        end else if (filter[0] = '#') then begin
+            //Custom logic
+            if containsText(filter[1], 'NoProperties') then begin
+                if (signature(rec) <> 'OMOD') then raise exception.create('Called NoProperties on a non-OMOD record filter');
+                if (elementCount(ElementByPath(rec, 'DATA\Properties')) = 0) then begin
+                    result := true;
+                    exit;
+                end;
+            end
+            else raise exception.create('Unrecognized logic qualifier #' + filter[1]);
+        end
+        else raise Exception.Create('**ERROR** encountered unexpected filter prefix: ' + filter[0]);
     end;
-    //logg(1, 'rec fails filter criteria: ' + editorId(rec));
     result := false;
 end;
+
 //============================================================================
 //returns whether a levelled list already has a faction  keyword
 function hasFactionKeyword(lvli: IInterface): boolean;
@@ -740,9 +1105,9 @@ begin
         keyword := linksTo(elementByPath(elementByIndex(llkcs, i), 'Keyword'));
         
         //iterate the faction keywords
-        for countFaction := 0 to factions.count-1 do begin
+        for countFaction := 0 to listFactions.count-1 do begin
             //check base keyword
-            faction := factions.objects[countFaction];
+            faction := listFactions.objects[countFaction];
             //logg(1, 'comparing keyword ' +  editorId(keyword) + ' = ' + editorId(ObjectToElement(faction.objects[fact_kywd])));
             if GetLoadOrderFormID(keyword) = GetLoadOrderFormID(ObjectToElement(faction.objects[fact_kywd])) then begin
                 result := true;
@@ -758,8 +1123,8 @@ begin
                 end;
             end;
             
-            //Check for Epic
-            if GetLoadOrderFormID(keyword) = GetLoadOrderFormID(ObjectToElement(epicFaction.objects[fact_kywd])) then begin
+            //Check for Epic keyword
+            if GetLoadOrderFormID(keyword) =epic_kywd_formId then begin
                 result := true;
                 exit;
             end;
@@ -776,33 +1141,46 @@ var
 begin
     result := false;
     logg(1, 'Checking if ' + editorId(item) + ' already has templates for ' + faction[fact_name]);
+    
+    //check main keyword
     keyword := ObjectToElement(faction.objects[fact_kywd]);
     if getFileName(getFile(keyword)) <> getFileName(masterPlugin) then begin
-        logg(1, 'checking if ' + editorId(item) + ' references ' + editorId(keyword));
-        for i := 0 to ReferencedByCount(keyword) -1 do begin
-            refBy := ReferencedByIndex(keyword, i);
-            if (getLoadOrderFormId(refBy) = getLoadOrderFormId(item)) AND isWinningOverride(refBy) then begin
-                logg(2, 'found ' + faction[fact_name] + 'template with kywd ' + editorId(keyword) + ' on ' + editorId(item));
+        if isReferencedBy(item, keyword) then begin
+            logg(2, 'found template with kywd ' + editorId(keyword) + ' on ' + editorId(item));
+            result := true;
+            exit;
+        end;
+    end;
+    
+    //check alt keywords
+    for countAlt := 0 to faction.objects[fact_alt_kywds].count-1 do begin
+        keyword := ObjectToElement(faction.objects[fact_alt_kywds].objects[countAlt]);
+        if getFileName(getFile(keyword)) <> getFileName(masterPlugin) then begin
+            if isReferencedBy(item, keyword) then begin
+                logg(2, 'found template with alt kywd ' + editorId(keyword) + ' on ' + editorId(item));
+                result := true;
                 exit;
             end;
         end;
     end;
-    
-    for countAlt := 0 to faction.objects[fact_alt_kywds].count-1 do begin
-        keyword := ObjectToElement(faction.objects[fact_alt_kywds].objects[countAlt]);
-        if getFileName(getFile(keyword)) <> getFileName(masterPlugin) then begin
-            logg(1, 'checking if ' + editorId(item) + ' references ' + editorId(keyword));
-            for i := 0 to ReferencedByCount(keyword)-1 do begin
-                refBy := ReferencedByIndex(keyword, i);
-                if (getLoadOrderFormId(refBy) = getLoadOrderFormId(item)) AND isWinningOverride(refBy) then begin
-                    logg(2, 'found ' + faction[fact_name] + 'template with kywd ' + editorId(keyword) + ' on ' + editorId(item));
-                    exit;
-                end;
-            end;
-        end;
-    end;
 end;
+//=======
+function isReferencedBy(item, keyword: IInterface): boolean;
+var
+    refBy:  IInterface;
+    i: integer;
+begin
+    result := false;
+    for i := 0 to ReferencedByCount(keyword) -1 do begin
+        refBy := ReferencedByIndex(keyword, i);
+        if not isWinningOverride(refBy) then continue;
+        if getLoadOrderFormId(refBy) <> getLoadOrderFormId(item) then continue;
 
+        result := true;
+        exit;
+    end;
+
+end;
 //============================================================================
 // Utility
 //============================================================================
@@ -830,7 +1208,7 @@ var
 
 begin
     logg(1, 'Adding filter keyword ' + keywordFormId + ' to ' + editorId(lvli));
-    if not assigned(keywordFormId) OR (keywordFormId = '') then raise exception.create('**ERROR** - addFilterKeywordToLVLI called without a keyword form id');
+    if not assigned(keywordFormId) OR (keywordFormId = '00000000') then raise exception.create('**ERROR** - addFilterKeywordToLVLI called without a keyword form id');
     filters := ElementByPath(lvli, 'LLKC');
     if not assigned(filters) then begin 
         Add(lvli, 'LLKC', true);
@@ -861,6 +1239,7 @@ begin
     end;
   end;
 end;
+
 
 //============================================================================  
 function HasAp(r: IInterface; keyword: string): boolean;
@@ -900,42 +1279,6 @@ begin
   
 end;
 
-//============================================================================
-function isPaintJob(omod: IInterface): boolean;
-var
-    ap : string;
-    i: integer;
-    refBy, properties : IInterface;
-    hasMatSwap : boolean;
-begin
-    //TODO - eventually need more robust examination of this
-        //Could add a check on the omod for a matswap
-    result := false;
-    hasMatSwap := false;
-    ap := getElementEditValues(omod, 'DATA\Attach Point');
-    if ContainsText(ap, 'ap_WeaponMaterial') then result := true;
-    if ContainsText(ap, 'Paint') then result := true;
-    if ContainsText(ap, 'color') then result := true;
-
-    properties := ElementByPath(omod, 'DATA\Properties');
-    for i := 0 to ElementCount(properties)-1 do begin
-        if getElementEditValues(ElementByIndex(properties, i), 'Property') <> 'MaterialSwaps' then continue;
-        hasMatSwap := true;
-        break;
-    end;
-    if not hasMatSwap then exit;
-        
-    //Check refBy, if it's already assigned to a weapon, or already in a modcol, then we don't want to redistribute it
-    for i := 0 to ReferencedByCount(omod)-1 do begin
-        refBy := ReferencedByIndex(omod, i);
-        if not isWinningOverride(refBy) then continue;
-        if (signature(refBy) = 'WEAP') OR (signature(refBy) = 'OMOD') OR (signature(refBy) = 'ARMO') then begin
-            result := false;
-            exit;
-        end;
-    end;
-     
-end;
 
 //============================================================================
 
@@ -1004,33 +1347,6 @@ begin
             result.add(normalizeMat(GetElementValues(elementByIndex(objMaterials, j), 'Folder Hash') +  '\' +  GetElementValues(elementByIndex(objMaterials, j), 'File Hash')));
     end;
     //logg(1, 'Found materials count ' + intToStr(result.count));
-end;
-
-//============================================================================
-function hasPaintjobAP(item: IInterface): boolean;
-var
-    sig: string;    
-
-begin
-    result := false;
-    
-    sig := signature(item);
-    if sig = 'ARMO' then begin
-        if hasAP(item, 'ap_armor_Paint') OR hasAP(item, 'ap_PowerArmor_Paint') then begin
-            result := true;
-            //logg(1, 'Found paintjob AP on  ' + editorId(item));
-            exit;
-        end;
-    end
-    else if sig = 'WEAP' then begin
-        if hasAP(item, 'ap_WeaponMaterial') then begin //TODO - not sure AP_WeaponMAterial isn't used extensively on melee weapons
-            result := true;
-            //logg(1, 'Found paintjob AP on  ' + editorId(item));
-            exit;
-        end;
-    end
-    else raise Exception.Create('**ERROR** unhandled signature: ' + sig);
-        
 end;
 
 //============================================================================
@@ -1162,23 +1478,28 @@ end;
 procedure addModcolToExistingTemplate(entry, modcol: IInterface);
 var
   i: integer;
+  modcolAp: cardinal;
   omod, addmod, flag, includes: IInterface;
+
 
 begin
     //If there's an omod with a compatible AP, then go ahead and replace it
     includes := ElementByPath(entry, 'OBTS\Includes');
     if not assigned(includes) then raise Exception.Create('**ERROR** includes not assigned ');
+    
+    //for each omod/modcol on the template, check if it has the same AP as the modcol to add
+    modcolAp := getLoadOrderFormId(LinksTo(ElementByPath(modcol, 'DATA\Attach Point')));
     for i := 0 to ElementCount(includes)-1 do begin
         omod := winningOverride(linksTo(elementByPath(elementByIndex(includes, i), 'Mod')));
-        
-        //check that the APs match
-        if getElementEditValues(omod, 'DATA\Attach Point') <> getElementEditValues(modcol, 'DATA\Attach Point') then continue;
-        //if the omod has any properties, then stop iterating, we only want to replace "null" omods
-        if assigned(elementByPath(omod, 'DATA\Includes')) then break;
-        
-        SetEditValue(ElementByPath(elementByIndex(includes, i), 'Mod'), IntToHex(GetLoadOrderFormID(modcol), 8));
-        logg(1, 'Replaced ' + editorId(omod) + ' -> ' + editorId(modcol));
-        exit;
+        logg(1, 'AddModcolToExistingTemplate comparing ' + editorId(modcol) + ' and ' + editorId(omod));
+        //if the AP matches the target modcol, either replace or exit
+        if getLoadOrderFormId(LinksTo(ElementByPath(omod, 'DATA\Attach Point'))) = modcolAp then begin
+            if modcolContainsOmod(modcol, omod) then begin
+                SetEditValue(ElementByPath(elementByIndex(includes, i), 'Mod'), IntToHex(GetLoadOrderFormID(modcol), 8));
+                logg(1, 'Replaced ' + editorId(omod) + ' -> ' + editorId(modcol));
+            end;
+            exit;
+        end;
     end;
     
     //else add the omod as a new includes
@@ -1190,66 +1511,29 @@ begin
   
 end;
 
-//============================================================================  
-procedure generateFactionVersionOfTemplate(item: IInterface; faction, modcols: TStringList; parentIndex: integer);
-var
-    entry, newKeyword, listmods, addmod, modID, modcol : IInterface;
-    i: integer;
-begin
-   //Add faction copies of this template for each registered faction modcol
-    	
-    //create the new template
-    entry := ElementAssign(ElementByPath(item, 'Object Template\Combinations'), HighInteger, nil, False);
-    setElementEditValues(entry, 'FULL', faction[fact_name]);
-    
-    newKeyword := ElementAssign(ElementByPath(entry, 'OBTS\Keywords'), HighInteger, nil, False);
-    SetEditValue(newKeyword, faction[fact_kywd]);
-    SetElementEditValues(entry, 'OBTS\Parent Combination Index', parentIndex); 
-    
-    //iterate through the attachment points, adding the fact mods for all the attachment points to the template for the faction
-    for i := 0 to modcols.count-1 do Begin
-        listmods := ElementByPath(entry, 'OBTS\Includes');
-        addmod := ElementAssign(listmods, HighInteger, nil, False);
-        modID := ElementByPath(addmod, 'Mod');
-
-        logg(1, 'adding modcol : ' + modcols[i]);
-        SetEditValue(modID, modcols[i]);
-    
-        SetEditValue(ElementByPath(addmod, 'Don''t Use All'), 'True');
-    end;
-end;
 //============================================================================
-function isGenericPaintKeyword(mnam: IInterface): boolean;
-var
-  listMods : IInterface;
-  i : Integer;
-begin
-    result := false;
-    if ContainsText(editorId(mnam), 'paint') then result := true
-    else if ContainsText(editorId(mnam), 'material') then result := true
-    else if ContainsText(editorId(mnam), 'color') then result := true;
-end;
-//============================================================================
-function getPainjobMnam(paintjob: IInterface): IInterface;
+function getPaintjobMnam(paintjob: IInterface): IInterface;
 var
   temp : IInterface;
   i : Integer;
 begin
     for i := 0 to elementCount(ElementBySignature(paintjob, 'MNAM'))-1 do begin
-        temp := ElementByIndex(ElementBySignature(paintjob, 'MNAM'), i);
-        logg(1, 'Evaluating keyword as candidate for generic: ' + 'editorId(temp)');
-        if isGenericPaintKeyword(temp) then begin
+        temp := winningOverride(linksTo(ElementByIndex(ElementBySignature(paintjob, 'MNAM'), i)));
+        if isRecordFiltered(temp, filter_paintjob_kywd) then begin
             result := temp;
             exit;
         end;
     end;
+    //if not assigned(result) then logg(4, 'Unable to identify a paintjob relevant mnam for ' + editorId(paintjob));
+    result := winningOverride(LinksTo(ElementByIndex(ElementBySignature(paintjob, 'MNAM'), 0)));
 end;
 //============================================================================
-function generateFactionTemplate(item: IInterface): integer;
+function getShouldGenerateFactionTemplates(item: IInterface): integer;
 var
   i, countFaction: integer;
   keywords: IwbElement;
 begin
+    //TODO - reconfigure this to load from a config file?
     if hasKwda(item, 'ObjectTypeWeapon') then result := true
     else if hasKwda(item, 'ObjectTypeArmor') then result := true
     else if hasKwda(item, 'ArmorTypePower') then result := true
@@ -1266,6 +1550,23 @@ begin
         if isWinningOverride(ReferencedByIndex(e, i)) then result := result + 1;
     end;
       
+end;
+//============================================================================
+function modcolContainsOmod(modcol, omod: IInterface): boolean;
+var
+  listMods : IInterface;
+  i : Integer;
+begin
+    listmods := ElementByPath(modcol, 'DATA\Includes');
+    
+    for i := 0 to ElementCount(listMods)-1 do begin
+      //Todo- verify this works, and doesn't need to be replaced with a formID comparison
+      if winningOverride(LinksTo(ElementByPath(ElementByIndex(listMods, i), 'Mod'))) <> omod then continue;
+        result := true;
+        exit;
+    end;
+
+
 end;
 
 //============================================================================  
