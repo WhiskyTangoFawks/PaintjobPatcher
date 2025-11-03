@@ -5,12 +5,12 @@ var
     fact_name, fact_kywd, fact_alt_kywds, fact_paintjobs, fact_filter_paint, fact_filter_lvli, fact_filter_item : integer;
     listMaster, listFactions, listDefaultFactions, listEpicFactions, listDefaultPaSets, listEpicPaSets: TStringList;
     filter_paintjob_ap, filter_paintjob_kywd, filter_allow_redistribute, filter_eval_furn, filter_eval_item, filter_eval_omod, filter_eval_lvli: TStringList;
+    cacheFilterKeywordLookup: TStringList;
 
 //============================================================================
 // Configuration
 //============================================================================
 procedure initConfig();
-
 begin
     logg(1, 'Loading Config.ini');
     config_options := TMemIniFile.Create('Edit Scripts\FactionPaintjobs\Config.ini');
@@ -23,15 +23,14 @@ begin
     filter_eval_item := getConfigList(config_options, 'Config', 'filter_eval_item');
     filter_eval_lvli := getConfigList(config_options, 'Config', 'filter_eval_lvli');
     filter_eval_omod := getConfigList(config_options, 'Config', 'filter_eval_omod');
-    
 
 end;
 
 //================
 procedure initFactions();
 var
-  i, j, p : integer;
-  keywordString, filename, section : String;
+  i, j: integer;
+  section : String;
   keyword : IInterface;
   tempFactions, factionValues, filterValues, temp : TStringList;
 
@@ -91,11 +90,7 @@ begin
         temp := getConfigList(config_factions, tempFactions[i], ini_alt_keywords);
         filterValues := TStringList.create;
         for j := 0 to temp.count -1 do begin
-            p := Pos('|', temp[j]);
-            filename := Copy(temp[j], 1, p-1);
-            keywordString := Copy(temp[j], P+1, Length(temp[j]));
-            keyword := MainRecordByEditorID(GroupBySignature(fileByName(filename), 'KYWD'), keywordString);
-            if not assigned(keyword) then raise Exception.create('** ERROR ** unable to find alt keyword ' + keywordString + ' in file ' + filename);
+            keyword := getKeywordByFileAndEdid(temp[j]);
             filterValues.addObject(IntToHex(GetLoadOrderFormID(keyword), 8), keyword)
         end;
         factionValues.addObject(ini_alt_keywords, filterValues);
@@ -143,11 +138,7 @@ begin
     logg(1, 'GenerateFactionKeyword: ' + keyword);
     
     if (keyword <> '') then begin
-        p := Pos('|', keyword);
-        filename := Copy(keyword, 1, p-1);
-        keyword := Copy(keyword, P+1, Length(keyword));
-        result := MainRecordByEditorID(GroupBySignature(fileByName(filename), 'KYWD'), keyword);
-        if not assigned(result) then raise Exception.create('** ERROR ** unable to find keyword ' + keyword + ' in file ' + filename);
+        result := getKeywordByFileAndEdid(keyword);
         logg(1, 'Found override keyword: ' + filename + '|' + keyword + ' : ' + editorId(result));
     end
     //else create the faction keyword
@@ -163,14 +154,15 @@ end;
 //=======
 function getConfigList(config: TMemIniFile; faction, key: String): TStringList;
 var
-    str, prefix, suffix, filterString: String;
-    i, suffixPos: integer;
-    rawList, filter: TStringList;
+    str, prefix, suffix, filterString, repVar: String;
+    i, j, suffixPos: integer;
+    rawList, subList, filter: TStringList;
 
 begin
+    
     str := config.readString(faction, key, '');
     str := trim(str);
-    
+
     rawList := TStringList.create;
     rawList.Delimiter := ',';
     rawList.DelimitedText := str;
@@ -178,30 +170,62 @@ begin
     result := TStringList.create;
     for i := 0 to rawList.count-1 do begin
         
-        prefix := Copy(rawList[i], 1, 1);
-        if (prefix = '+') or (prefix = '-') or (prefix = '!') or (prefix = '#') then begin
-            filterString := Copy(rawList[i], 2, Length(rawList[i]) - 1);
-        end else begin
-            prefix := '';
-            filterString := rawList[i];
-        end;
-        suffixPos := pos(':', filterString);
-        if (suffixPos > 0) then begin
-            suffix := copy(filterString, suffixPos+1, length(filterString));
-            filterString := copy(filterString, 1, suffixPos-1);            
-        end else suffix := '';
+        rawList[i] := trim(rawList[i]);
 
-        filter := TStringList.create;
-        result.AddObject(rawList[i], filter);
-        filter.add(prefix);
-        filter.add(filterString);
-        filter.add(suffix);
+        repVar := config_options.readString('ReplacementVars', rawList[i], '');
+        if (repVar <> '') then begin
+            logg(2, key + ' - Found config replacement ' + rawList[i] + ' -> ' + repVar);
+            repVar := trim(repVar);
+            subList := TStringList.create;
+            subList.Delimiter := ',';
+            subList.DelimitedText := repVar;
+            for j := 0 to sublist.count-1 do begin
+                filter := splitConfigEntry(subList[j]);
+                result.AddObject(subList[j], filter);
+            end;
+            sublist.free;
+        end
+        else begin
+            filter := splitConfigEntry(rawList[i]);
+            result.AddObject(rawList[i], filter);
+        end;
         
     end;
 
     if (result.count < 1) then logg(3, 'Found empty faction filter: ' + faction + ' - ' +key);
     rawList.free;
 
+end;
+//=======
+function splitConfigEntry(str: string): TStringList;
+var
+    prefix, suffix, filterString: String;
+    suffixPos: integer;
+
+begin
+    prefix := Copy(str, 1, 1);
+    if (prefix = '+') or (prefix = '-') or (prefix = '!') or (prefix = '#') then begin
+        filterString := Copy(str, 2, Length(str) - 1);
+    end else begin
+        prefix := '';
+        filterString := str;
+    end;
+    suffixPos := pos(':', filterString);
+    if (suffixPos > 0) then begin
+        suffix := copy(filterString, suffixPos+1, length(filterString));
+        filterString := copy(filterString, 1, suffixPos-1);            
+    end else suffix := '';
+    
+    //replace keyword EDIDs with formIDs so I don't have to repeat the lookup
+    if (filterString = 'keyword') then begin
+        suffix := intToHex(getLoadOrderFormId(getKeywordByFileAndEdid(suffix)), 8);
+    end;
+
+    result := TStringList.create;
+    result.delimiter := ' | ';
+    result.add(prefix);
+    result.add(filterString);
+    result.add(suffix);
 end;
 
 //============================================================================  
@@ -212,7 +236,9 @@ var
 begin
     for i := 0 to listDefaultFactions.count-1 do begin
         faction := listDefaultFactions.objects[i];
+        logg(1, 'Checking for default faction: ' + faction[fact_name]);
         if isItemFiltered(item, faction.objects[fact_filter_item], cacheApprFormId, cacheKywdFormId) then begin
+            logg(2, 'FOUND default faction: ' + faction[fact_name]);
             result := faction;
             exit;
         end;
@@ -229,7 +255,7 @@ begin
     for i := 0 to listEpicFactions.count-1 do begin
         faction := listEpicFactions.objects[i];
         if isItemFiltered(item, faction.objects[fact_filter_item], cacheApprFormId, cacheKywdFormId) then begin
-            //logg(1, 'Found epic faction ' + faction[fact_name] + ' for item' + editorId(item));
+            logg(2, 'Found epic faction ' + faction[fact_name] + ' for item' + editorId(item));
             result := faction;
             exit;
         end;
@@ -264,33 +290,35 @@ begin
 end;
 
 //============================================================================  
-function isRecordFiltered(rec: IInterface; value: string; filterList, cacheKywdFormId, cacheApprFormId: TStringList): boolean;
+function isRecordFiltered(rec: IInterface; value: string; filterList, cacheApprFormId, cacheKywdFormId: TStringList): boolean;
 var
-    countFilter: integer;
-    value: String;
+    countFilter, indexKywd: integer;
     hasText : boolean;
     filter : TStringList;
+    keywordFormId : string;
 begin
     result := false;
-    
-    //Paintjobs are filtered based on their FULL, the rest are filtered based on EDID
-    if signature(rec) = 'OMOD' then value := getElementEditValues(rec, 'FULL')
-    else value := editorId(rec);
-
     if not assigned(filterList) then raise exception.create('**ERROR** Missing filter list');
+    
     //iterate through the filter terms
     for countFilter := 0 to filterList.count-1 do begin
         filter := filterList.objects[countFilter];
-        
+        //logg(1, 'testing filter: ' + filter.DelimitedText);
         if (filter[2] = '') then hasText := containsText(value, filter[1])
-        else if filter[1] = 'keyword' then hasText := (cacheKywdFormId.indexOf(filter[2]) <> -1)
+        else if filter[1] = 'keyword' then begin
+            hasText :=  (cacheKywdFormId.indexOf(filter[2]) <> -1);
+            if hasText then logg(1, 'filtering: FOUND Keyword ' + filter[2] + ' continuing to comparison check');
+            //else logg(1, 'filtering: Keyword= ' + filter[2] + ' continuing to comparison check');
+        end
         else if filter[1] = 'signature' then hasText := (signature(rec) = filter[2])
+        else if filter[1] = 'edid' then hasText := containsText(editorId(rec), filter[2])
+        else if filter[1] = 'full' then hasText := containsText(getElementEditValues(rec, 'FULL'), filter[2])
         else raise exception.create('Unrecognized filter string with suffix :' + filter[1]);
 
         if (filter[0] = '+') then begin
             //requires: if DOESN'T have this, return false and exit
             if not hasText then begin
-                //logg(1, 'filtering: missing + filter, returning false: ' + value + ' - ' +  filterString);
+                //logg(1, 'filtering: missing + filter, returning false: ' + value + ' - ' +  filter.DelimitedText);
                 result := false;
                 exit;
             end;
@@ -298,16 +326,19 @@ begin
             //Blacklist: If has this, return false and exit
             if hasText then begin
                 result := false;
+                //logg(1, 'filtering: found - filter, returning false: ' + value + ' - ' +  filter.DelimitedText);
                 exit;
             end;
         end else if (filter[0] = '') then begin
             //no prefix: terminal entry. If has this filter keyword, then return true and exit
             if hasText then begin
+                //logg(1, 'filtering: found match, returning true: ' + value + ' - ' +  filter.DelimitedText);
                 result := true;
                 exit;
             end;
         end else if (filter[0] = '!') then begin
             //accept all, useful if you're doing a bunch of negative filtering before it
+            //logg(1, 'filtering: !, returning true: ' + value + ' - ' +  filter.DelimitedText);
             result := true;
             exit;
         end else if (filter[0] = '#') then begin
@@ -315,6 +346,7 @@ begin
             if containsText(filter[1], 'NoProperties') then begin
                 if (signature(rec) <> 'OMOD') then raise exception.create('Called NoProperties on a non-OMOD record filter');
                 if (elementCount(ElementByPath(rec, 'DATA\Properties')) = 0) then begin
+                    //logg(1, 'filtering: Found NO PROPERTIES, returning true: ' + value + ' - ' +  filter.DelimitedText);
                     result := true;
                     exit;
                 end;
@@ -323,9 +355,9 @@ begin
         end
         else raise Exception.Create('**ERROR** encountered unexpected filter prefix: ' + filter[0]);
     end;
+    //logg(1, 'filtering: no match found, returning false ');
     result := false;
 end;
-
 
 //=======
 function itemAlreadyHasTemplatesForFaction(item: IInterface; faction: TStringList): boolean;
@@ -406,5 +438,18 @@ begin
         
 end;
 
+function getKeywordByFileAndEdid(str: String): IInterface;
+var
+    p: integer;
+    filename, keyword: string;
+
+begin
+    p := Pos('|', str);
+    filename := Copy(str, 1, p-1);
+    if filename = '' then raise Exception.create('** ERROR ** missing file name for' + keyword);
+    keyword := Copy(str, P+1, Length(str));
+    result := MainRecordByEditorID(GroupBySignature(fileByName(filename), 'KYWD'), keyword);
+    if not assigned(result) then raise Exception.create('** ERROR ** unable to find keyword ' + keyword + ' in file ' + filename);
+end;
 
 end.

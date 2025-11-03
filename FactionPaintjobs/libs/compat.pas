@@ -27,7 +27,7 @@ var
     appr, mnam: IInterface;
     i, apprKywdIndex, matIndex: integer;
     apId, mnamId, apprKywd: string;
-    replacedMaterials, listApprKywd, oldMatList: TStringList;
+    replacedMaterials, listApprKywd, listApprKywds, oldMatList: TStringList;
 
 begin   
     //only index materials if it's a simple, single keyword paintjob. More complex paintjobs are distributed, but don't try to add their keywords to items
@@ -60,20 +60,25 @@ begin
     listApprKywd.add(apId);
     listApprKywd.add(mnamId);
 
+    //listCompatMatswaps is a list<matSwap, ApprKeyword>, and I need it to be a list of ApprKeyword
+
     //For each matswap, register 
     for i := 0 to replacedMaterials.count-1 do begin
         matIndex := listCompatMatswaps.indexOf(replacedMaterials[i]);
-        //TODO - I'm not entirely sure how this will handle subsets- it should be detected in the previous step and exitted early
-        if matIndex = -1 then listCompatMatswaps.addObject(replacedMaterials[i], listApprKywd)
-        else listCompatMatswaps.objects[matIndex] := listApprKywd;
+        if matIndex = -1 then begin
+            listApprKywds := TStringList.create;
+            listApprKywds.addObject(apprKywd, listApprKywd);
+            listCompatMatswaps.addObject(replacedMaterials[i], listApprKywds)
+        end
+        else listCompatMatswaps.objects[matIndex].addObject(apprKywd, listApprKywd);
     end;
 
 end;
 //============================================================================
 function evalMissingKeywords(item: IInterface; cacheApprFormId, cacheKywdFormId: TStringList): boolean;
 var
-    cacheMatSwap, apprKywd : TStringList;
-    i, matIndex : Integer;
+    cacheMatSwap, apprKywds, apprKywd : TStringList;
+    i, j, matIndex : Integer;
     apprId, kywdId: String;
 begin
     result := false;
@@ -83,19 +88,24 @@ begin
     for i := 0 to cacheMatSwap.count-1 do begin
         matIndex := listCompatMatswaps.indexOf(cacheMatSwap[i]);
         if (matIndex = -1) then continue;
-        apprKywd := listCompatMatswaps.objects[matIndex];
-        apprId := apprKywd[0];
-        kywdId := apprKywd[1];
-        
-        if cacheApprFormId.indexOf(apprId) = -1 then begin 
-            getOrAddList(apprsToAdd, IntToHex(getLoadOrderFormId(item), 8)).add(apprId);
-            cacheApprFormId.add(apprId);
-            result := true;
-        end;
-        if cacheKywdFormId.indexOf(kywdId) = -1 then begin 
-            getOrAddList(kywdsToAdd, IntToHex(getLoadOrderFormId(item), 8)).add(kywdId);
-            cacheKywdFormId.add(kywdId);
-            result := true;
+        apprKywds := listCompatMatswaps.objects[matIndex];
+        for j := 0 to apprKywds.count-1 do begin
+            apprKywd := apprKywds.objects[j];
+            apprId := apprKywd[0];
+            kywdId := apprKywd[1];
+            
+            if cacheApprFormId.indexOf(apprId) = -1 then begin 
+                getOrAddList(apprsToAdd, IntToHex(getLoadOrderFormId(item), 8)).add(apprId);
+                cacheApprFormId.add(apprId);
+                logg(2, 'Identified missing APPR: ' +apprId );
+                result := true;
+            end;
+            if cacheKywdFormId.indexOf(kywdId) = -1 then begin 
+                getOrAddList(kywdsToAdd, IntToHex(getLoadOrderFormId(item), 8)).add(kywdId);
+                cacheKywdFormId.add(kywdId);
+                logg(2, 'Identified missing KYWD: ' +kywdId);
+                result := true;
+            end;
         end;
     end;
     cacheMatSwap.free;
@@ -115,7 +125,8 @@ begin
     if apprIndex <> -1 then begin
         list := apprsToAdd.objects[apprIndex];
         for i := 0 to list.count-1 do begin
-            entry := ElementAssign(ElementByPath(item, 'APPR'), HighInteger, nil, False);
+            if assigned(ElementByPath(item, 'APPR')) then entry := ElementAssign(ElementByPath(item, 'APPR'), HighInteger, nil, False)
+            else entry := elementByIndex(add(item, 'APPR', true), 0);
             logg(3, 'Adding Attach Point ' + list[i]);
             setEditValue(entry, list[i]);
         end;
@@ -124,7 +135,8 @@ begin
     if kywdIndex <> -1 then begin
         list := kywdsToAdd.objects[kywdIndex];
         for i := 0 to list.count-1 do begin
-            entry := ElementAssign(ElementByPath(item, 'Keywords\KWDA'), HighInteger, nil, False);
+            if assigned(ElementByPath(item, 'Keywords\KWDA')) then entry := ElementAssign(ElementByPath(item, 'Keywords\KWDA'), HighInteger, nil, False)
+            else entry := elementByIndex(add(add(item, 'Keywords', true), 'KWDA', true), 0);
             logg(3, 'Adding keyword ' + list[i]);
             setEditValue(entry,  list[i]);
         end;

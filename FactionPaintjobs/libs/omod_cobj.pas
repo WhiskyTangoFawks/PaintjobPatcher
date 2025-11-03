@@ -94,6 +94,7 @@ begin
     appr := linksTo(elementByPath(omod, 'DATA\Attach Point'));
 
     //Add the paintjob to the stored paintjob lists for the various factions
+    //paintjobs are stored in faction[fact_paintjobs], which is basically map<appr, map<mnam, map<edid, omod>>>
     for i := 0 to listMaster.count -1 do begin
         faction := listMaster.objects[i];
         logg(1, 'evaluating faction ' + faction[fact_name]);
@@ -101,9 +102,8 @@ begin
             listAppr_listMnams := getOrAddList(faction.objects[fact_paintjobs], editorId(appr));
             listMnams := getOrAddList(listAppr_listMnams, concatMnams(omod));
             listMnams.addObject(IntToHex(GetLoadOrderFormID(omod), 8), omod);
-            logg(3, 'FOUND MATCHING - Faction= ' + faction[fact_name] + ' paintjob= ' + editorId(omod));
-        end 
-        else logg(1, 'nonmatching: Faction= ' + faction[fact_name] + ' paintjob= ' + editorId(omod));
+            logg(3, 'Adding paintjob to Faction= ' + faction[fact_name] + ' paintjob= ' + editorId(omod));
+        end;
     
     end;
 

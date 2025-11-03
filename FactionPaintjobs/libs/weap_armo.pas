@@ -13,13 +13,10 @@ begin
     //filter out non playable and unused
     result := false;
     if (getElementEditValues(item, 'Record Header\record flags\Non-Playable') = '1') then exit; //skip unplayable items
-    if not assigned(ElementByPath(item, 'Object Template\Combinations')) then exit; //skip items completely missing templates
     if assigned(elementByPath(item, 'CNAM')) then exit; //templated weapons
     if assigned(elementByPath(item, 'TNAM')) then exit; //templated armor
     if (winningRefByCount(item) < 1) then exit; //skip unused items
-    //if it doesn't have keywords or attach points
-    if not assigned(ElementByPath(item, 'APPR')) then exit;
-    if not assigned(ElementByPath(item, 'Keywords\KWDA')) then exit;
+
     
     if not isItemFiltered(item, filter_eval_item, cacheApprFormId, cacheKywdFormId) then exit;
     sig := signature(item);
@@ -33,6 +30,16 @@ begin
     if evalMissingKeywords(item, cacheApprFormId, cacheKywdFormId) then begin
         result := true;
         exit;
+    end else begin
+        //if it doesn't have keywords or attach points
+        if not assigned(ElementByPath(item, 'APPR')) then begin
+            logg(1, 'skipping item with no APPRs, and no compatible APPRs to add');
+            exit;
+        end;
+        if not assigned(ElementByPath(item, 'Keywords\KWDA')) then begin
+            logg(1, 'skipping item with no KWDAs, and no compatible KWDAs to add');
+            exit;
+        end;
     end;
     
     for countFaction := 0 to listMaster.count()-1 do begin
@@ -67,6 +74,7 @@ begin
     addMessage('***** Processing '+ getFileName(getFile(MasterOrSelf(item))) + ' ' + EditorID(item) + ' '+ IntToHex(GetLoadOrderFormID(item), 8) + ' *****');
     
     processMissingKeywords(item);
+    if not assigned(ElementByPath(item, 'Object Template\Combinations')) then addDefaultTemplate(item);
     
     cacheApprFormId := getApprCache(item);
     cacheKywdFormId := getKwdaCache(item);
@@ -97,7 +105,7 @@ begin
     for countFaction := 0 to listFactions.count-1 do begin
         faction := listFactions.objects[countFaction];
         if not isItemFiltered(item, faction.objects[fact_filter_item], cacheApprFormId, cacheKywdFormId) then begin
-            logg(1, 'Failed faction item filter, skipping');
+            logg(1, 'Failed faction item filter, skipping: ' + faction[fact_name]);
             continue;
         end;
         logg(1, 'Processing Faction Templates: ' + faction[fact_name]);
@@ -130,6 +138,21 @@ begin
     cacheApprFormId.free;
     cacheKywdFormId.free;
     
+end;
+//=============================
+procedure addDefaultTemplate(item: IInterface);
+var
+    temp, combos, firstCombo: IInterface;
+begin
+    logg(2, 'Adding default template to item without any templates');
+    
+    temp := Add(item, 'Object Template', True);
+    combos := ElementAssign(temp, 1, nil, False);
+    firstCombo := ElementByIndex(combos, 0);
+    
+    setElementEditValues(firstCombo, 'FULL', 'Default');
+    setElementEditValues(firstCombo, 'OBTS\Default', 'True');
+    setElementEditValues(firstCombo, 'OBTS\Parent Combination Index', '-1')
 end;
 
 //============================================================================
@@ -167,14 +190,14 @@ var
     hasFactionTemplate : boolean;
 begin
     if (listApprModcol.count = 0) then begin
-        logg(1, 'applyFactionModcols: listApprModcol.count = 0');
+        logg(1, 'applyFactionModcols called with empty modcol list');
         exit;
     end;
-
+    logg(1, 'Applying faction modcols: ' + faction[fact_name]);
     //if already has faction, then enrich, ELSE create version for each default
     hasFactionTemplate := false;
     templates := ElementByPath(item, 'Object Template\Combinations');
-    logg(1, 'Checking if item already has faction');
+    if not assigned(templates) then raise exception.create('Failed to assign templates');
     for countTemplate := 0 to ElementCount(templates)-1 do Begin
         template := ElementByIndex(templates, countTemplate);
         kwdaFormId := GetLoadOrderFormID(linksTo(elementByIndex(ElementByPath(template, 'OBTS\Keywords'), 0)));
@@ -193,9 +216,15 @@ begin
         end;
     end;
 		
-    if hasFactionTemplate then exit;
-    maxTemplate := ElementCount(templates)-1;
+    if hasFactionTemplate then begin
+        logg(1, 'Item already has faction: ' + faction[fact_name]);
+        exit;
+    end;
+    
+    maxTemplate := ElementCount(templates);
+    logg(1, 'Generating Faction Template Versions for ' + intToStr(maxTemplate) + ' parent templates');
     for countTemplate := 0 to maxTemplate-1 do Begin
+        logg(1, ' generating faction version of ' + intToStr(countTemplate));
         template := ElementByIndex(templates, countTemplate);
         parentIndex := StrToInt(GetElementEditValues(template, 'OBTS\Parent Combination Index'));
         if (parentIndex <> -1) then exit; //If we've hit the non-basic templates, then we're done.
@@ -314,8 +343,9 @@ begin
                     else entry := ElementAssign(ElementByPath(modcol, 'DATA\Includes'), HighInteger, nil, False);
                     setElementEditValues(entry, 'Mod', IntToHex(GetLoadOrderFormID(paintjob), 8));
                 end;
+                logg(1, 'Created modcol: ' + editorID(modcol));
             end;
-
+        
             result.addObject(apEdid, modcol);
         end;
         listMnams.free;
@@ -356,6 +386,8 @@ var
 
 
 begin
+    logg(1, 'AddModcolToExistingTemplate: ' + editorId(modcol));
+
     //If there's an omod with a compatible AP, then go ahead and replace it
     includes := ElementByPath(entry, 'OBTS\Includes');
     if not assigned(includes) then raise Exception.Create('**ERROR** includes not assigned ');
@@ -380,7 +412,7 @@ begin
 	SetEditValue(ElementByPath(addmod, 'Mod'), IntToHex(GetLoadOrderFormID(modcol), 8));
 	flag := ElementByPath(addmod, 'Don''t Use All');
 	SetEditValue(flag, 'True');
-    logg(1, 'Added as new ' + editorId(modcol));
+    logg(1, 'Added as new template ' + editorId(modcol));
   
 end;
 

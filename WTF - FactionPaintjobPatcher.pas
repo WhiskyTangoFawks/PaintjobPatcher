@@ -1,6 +1,6 @@
 unit FPD_main;
 
-uses 'lib\mxpf';
+uses 'FactionPaintjobs\libs\mxpf';
 uses 'FactionPaintjobs\libs\factions';
 uses 'FactionPaintjobs\libs\paintjobs';
 uses 'FactionPaintjobs\libs\omod_cobj';
@@ -17,7 +17,7 @@ var
 
 const	
     masterPlugin = fileByName('FactionPaintjobs.esp');
-    log_level = 1; //1=trace, 2=debug, 3=info, 4=warn, 5=error
+    log_level = 3; //1=trace, 2=debug, 3=info, 4=warn, 5=error
 
 function Initialize: Integer;
 var
@@ -78,10 +78,9 @@ begin
     AddMessage('   ');
     AddMessage('Processing OMODS/COBJs');
     for i := 0 to MaxPatchRecordIndex do if (signature(GetPatchRecord(i)) = 'COBJ') then processOmodAndCobj(GetPatchRecord(i));
-    
     //After indexing the paintjobs, any factions that don't have any paintjobs mapped for them can be disabled.
     removeFactionsWithNoPaintjobs();
-
+    
     //Load LVLIs to the patch and copy, so we can then filter FURNs if the LVLI is already in the patch;
     LoadRecords('LVLI');
     AddMessage('Evaluating Lvli');
@@ -108,7 +107,8 @@ begin
     LoadRecords('FURN');
     for i := MaxRecordIndex downto 0 do if (signature(getRecord(i)) = 'FURN') then if (NOT evalFurn(getRecord(i))) then removeRecord(i);
 
-    
+    //TODO - Eval Outfits, and make faction copies of lists they use that aren't faction specific
+
     // then copy records to the patch file
     CopyRecordsToPatch;
     
@@ -221,7 +221,7 @@ var
   m, prevovr, ovr: IInterface;
   i: integer;
 begin
-  logg(1, 'Checking for identical to master: ' + Name(e));
+  //logg(1, 'Checking for identical to master: ' + Name(e));
   m := MasterOrSelf(e);
 
   // find previous override record in a list of overrides for master record
@@ -235,7 +235,7 @@ begin
   
   // remove record if no conflicts
   if ConflictAllForElements(prevovr, e, False, False) <= caNoConflict then begin
-     logg(1, 'Removing: ' + Name(e));
+     //logg(1, 'Removing: ' + Name(e));
     remove(e);
   end;
 end;
