@@ -23,7 +23,7 @@ begin
         if containsText(editorId(lvli), 'fusioncore') then continue;//skip analysis of fusion cores
         
         //If a lvli is already flagged for patching, then false 
-        if getFileName(getFile(lvli)) = getFileName(mxPatchFile) then exit; 
+        if getFileName(getFile(lvli)) = getFileName(patchFile) then exit; 
         
         //If a lvli already has a faction keyword, then false
         if hasFactionKeyword(lvli) then exit;
@@ -37,31 +37,41 @@ end;
 //============================================================================
 procedure processFurn(furn: IInterface);
 var
-    countFact, furnFaction, countSet, countList: integer;
+    i, countFact, furnFaction, countSet, countList: integer;
     items, defaultLvli, lvli, firstItem, secondItem, paintjob, newList, entries, listItems, addItem, listEntry: IInterface;
     faction, paSets: TStringList;
 begin
-    addMessage('***** Processing '+ EditorID(furn) + ' '+ IntToHex(GetLoadOrderFormID(furn), 8) + ' *****');
-    furnFaction := -1;
-
+    if winningRefByCount(furn) < 1 then exit; //skip unused
+    if getElementEditValues(furn, 'Record Header\record flags\Power Armor') <> '1' then exit;
+    
     items := elementByPath(furn, 'Items');
-    if not assigned(items) then raise Exception.Create('**ERROR** failed to assign items');
-    firstItem := elementByPath(elementByIndex(items, 0), 'CNTO\Item');
-    if not assigned(firstItem) then raise Exception.Create('**ERROR** failed to assign first item');
-    secondItem := elementByPath(elementByIndex(items, 1), 'CNTO\Item');
-    if (elementCount(items) > 1) AND (not assigned(secondItem)) then raise Exception.Create('**ERROR** failed to assign second item');
+    if not assigned(items) then exit; //if it's an empty frame, skip it
 
+    if not isFurnFiltered(furn, filter_eval_furn) then exit;
+    
+    //Check the items, to see if it shouldn't be patched
+    for i := 0 to elementCount(items)-1 do begin
+        lvli := linksTo(ElementByPath(elementByIndex(items, i), 'CNTO\Item'));
+        if containsText(editorId(lvli), 'fusioncore') then continue;//skip analysis of fusion cores
+        if getFileName(getFile(lvli)) = getFileName(patchFile) then exit; //If a lvli is already flagged for patching, then false 
+        if hasFactionKeyword(lvli) then exit; //If a lvli already has a faction keyword, then false
+    end;
+
+    addMessage('***** Processing '+ EditorID(furn) + ' '+ IntToHex(GetLoadOrderFormID(furn), 8) + ' *****');
+    furn := copyOverrideToPatch(furn);
+    items := elementByPath(furn, 'Items'); //get the items object from the new copy
+    furnFaction := -1;
+    firstItem := elementByPath(elementByIndex(items, 0), 'CNTO\Item');
+    secondItem := elementByPath(elementByIndex(items, 1), 'CNTO\Item');
+    
     //Look at the items - if individual pieces instead of suit, copy to lvli
         //create a new armor set list that has those individual pieces, replace in items
         //else grab the existing set lvli
     if (elementCount(items) > 2) then lvli := copyFurnToNewLvli(furn) 
     else if (elementCount(items) = 2) AND containsText(editorId(linksTo(firstItem)), 'fusionCore') then lvli := linksTo(secondItem)
-    else if elementCount(items) = 2 then lvli := linksTo(firstItem)
-    else if elementCount(items) = 1 then lvli := linksTo(firstItem)
-    else raise Exception.Create('**ERROR** trying to process FURN with empty items');
+    else lvli := linksTo(FirstItem);    
+    if signature(lvli) <> 'LVLI' then lvli := copyFurnToNewLvli(furn);
     
-    if signature(lvli) <> 'LVLI' then exit;
-
     //If based on the name, this is a faction pa suit, (but the levelled lists aren't faction specific)
     for countFact := 0 to listFactions.count-1 do begin
         if isFurnFiltered(furn, listFactions.objects[countFact].objects[fact_filter_lvli]) then faction := listFactions.objects[countFact]
@@ -73,10 +83,10 @@ begin
     end;
 
     if assigned(faction) then begin
-        if (getFileName(getFile(lvli)) = getFileName(mxPatchFile)) then addFilterKeywordToLVLI(lvli, faction[fact_kywd])
+        if (getFileName(getFile(lvli)) = getFileName(patchFile)) then addFilterKeywordToLVLI(lvli, faction[fact_kywd])
         //create a faction copy of the set list, replace it in the items
         else begin
-            lvli := wbCopyElementToFile(lvli, mxPatchFile, true, true);
+            lvli := copyRecordToFile(lvli, patchFile, true);
             setElementEditValues(lvli, 'EDID', editorId(lvli) + '_' + faction[fact_name]);
             addFilterKeywordToLVLI(lvli, faction[fact_kywd]);
             
@@ -97,7 +107,7 @@ begin
 
             //lazy creation of a wrapper lvli and assign to the furn (so I don't do this if there's nothing compatible)
             if not assigned(defaultLvli) then begin
-                defaultLvli := wbCopyElementToFile(template_pa_lvli, mxPatchFile, true, true);
+                defaultLvli := copyRecordToFile(template_pa_lvli, patchFile, true);
                 setElementEditValues(defaultLvli, 'EDID', 'LL_' + EditorId(furn));
                 setElementEditValues(defaultLvli, 'LVLF\Use All', '0');
                 
@@ -114,7 +124,7 @@ begin
             end;
 
             //create a copy of the list with the filter keyword
-            newList := wbCopyElementToFile(lvli, mxPatchFile, true, true);
+            newList := copyRecordToPatch(lvli, patchFile, true);
             setElementEditValues(newList, 'EDID', editorId(newList) + '_' + paSets[countSet]);
             
             addFilterKeywordToLVLI(newList, faction[fact_kywd]);
@@ -134,7 +144,7 @@ var
     items, newList, listItems, addItem, item, lvlo: IInterface;
 begin
     logg(2, 'Creating Furn-Specific LVLI for ' + editorid(furn));
-    newList := wbCopyElementToFile(template_pa_lvli, mxPatchFile, true, true);
+    newList := copyRecordToFile(template_pa_lvli, patchFile, true);
     if not assigned(newList) then raise Exception.Create('**ERROR** Failed to copy template to new record');
     SetElementEditValues(newList, 'EDID', StringReplace(editorId(newList), 'template', editorId(furn), [rfReplaceAll, rfIgnoreCase]));
     listItems := elementByPath(newList, 'Leveled List Entries');

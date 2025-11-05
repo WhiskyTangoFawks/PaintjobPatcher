@@ -143,7 +143,7 @@ begin
     end
     //else create the faction keyword
     else begin
-        newKeyword := wbCopyElementToFile(template_keyword, mxPatchFile, true, true);
+        newKeyword := copyRecordToFile(template_keyword, patchFile, true);
         setElementEditValues(newKeyword, 'EDID', 'if_tmp_' + faction);
         result := newKeyword;
         if not assigned(result) then raise Exception.create('** ERROR **failed to generate faction keyword');

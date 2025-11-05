@@ -1,34 +1,5 @@
 unit FPD_lvli;
 
-
-//============================================================================
-function evalLVLI(lvli: IInterface): boolean;
-var
-    i: integer;
-    faction : TStringList;
-    lvliEditorId: string;
-begin
-    lvliEditorId := editorId(lvli);
-    result := false;
-    addMessage('***** Evaluating ' + getFileName(getFile(MasterOrSelf(lvli))) + ' - ' + lvliEditorId + ' '+ IntToHex(GetLoadOrderFormID(lvli), 8) + ' *****');
-    if (winningRefByCount(lvli) < 1) then exit; //skip unused levelled lists
-    if hasFactionKeyword(lvli) then exit; //If a lvli already has a filter keyword, skip it
-    if not isLvliFiltered(lvli, filter_eval_lvli) then exit;
-    
-    //If the editorID contains one of the faction search terms, then flag it for patching.
-    for i := 0 to listFactions.count-1 do begin
-        faction := listFactions.objects[i];
-        result := isLvliFiltered(lvli, faction.objects[fact_filter_lvli]);
-        if (result) then exit;
-    end;
-    
-    if (containsText(lvliEditorId, 'CustomItem_') OR containsText(lvliEditorId, 'Aspiration')) then begin 
-        result := true;
-        exit;
-    end;
-
-end;
-
 //============================================================================
 function processLVLI(lvli: IInterface): boolean;
 var
@@ -36,6 +7,10 @@ var
     faction: TStringList;
     lvliEditorId: string;
 begin
+    if (winningRefByCount(lvli) < 1) then exit; //skip unused levelled lists
+    if hasFactionKeyword(lvli) then exit; //If a lvli already has a filter keyword, skip it
+    if not isLvliFiltered(lvli, filter_eval_lvli) then exit;
+
     lvliEditorId := EditorID(lvli);
     addMessage('***** Processing '+ lvliEditorId + ' '+ IntToHex(GetLoadOrderFormID(lvli), 8) + ' *****');
     //If the editorID contains one of the faction search terms, then flag it for patching.
@@ -43,12 +18,15 @@ begin
         faction := listFactions.objects[i];
         //skip to next if
         if not isLvliFiltered(lvli, faction.objects[fact_filter_lvli]) then continue;
+        lvli := copyOverrideToPatch(lvli);
         addFilterKeywordToLVLI(lvli, faction[fact_kywd]);
         exit;
     end;
 
-    if (containsText(lvliEditorId, 'CustomItem_') OR containsText(lvliEditorId, 'Aspiration')) then 
+    if (containsText(lvliEditorId, 'CustomItem_') OR containsText(lvliEditorId, 'Aspiration')) then begin
+        lvli := copyOverrideToPatch(lvli);
         addFilterKeywordToLVLI(lvli, intToHex(epic_kywd_formId, 8));
+    end;
     
 end;
 //============================================================================

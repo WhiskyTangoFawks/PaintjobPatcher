@@ -3,7 +3,7 @@ unit FPD_omod_cobj;
 uses 'FactionPaintjobs\libs\paintjobs';
 
 //============================================================================
-function evalOmod(omod: IInterface): boolean;
+procedure evalOmod(omod: IInterface); 
 var
     properties, refBy: IInterface;
     i, j: integer;
@@ -13,7 +13,6 @@ var
     appr: IInterface;
     
 begin
-    result := false;
     //exit if it's not a paintjob
     if getElementEditValues(omod, 'Record Header\Record Flags\Mod Collection') = '1' then exit;
     appr:= linksTo(elementByPath(omod, 'DATA\Attach Point'));
@@ -50,7 +49,6 @@ begin
                 if not isWinningOverride(refBy) then continue;
                 if (signature(refBy) = 'WEAP') OR (signature(refBy) = 'ARMO') OR (signature(refBy) = 'QUST') OR (signature(refBy) = 'FLST') then begin
                     logg(3, 'Paintjob is already distributed, returning false: ' + editorId(omod));
-                    result := false;
                     exit;
                 end
                 else if (signature(refBy) = 'OMOD') then begin
@@ -61,33 +59,22 @@ begin
         end;
     end;
     
-    result := true;
+    copyOverrideToPatch(omod);
         
-end;
-
-//============================================================================
-function evalCobj(cobj: IInterface): boolean;
-var
-    cnam : IInterface;
-
-begin
-    result := false;
-    
-    cnam := winningOverride(linksTo(elementByPath(cobj, 'CNAM')));
-    if (getFileName(getFile(cnam)) <> getFileName(mxPatchFile)) then exit;
-    //addMessage('***** Evaluating '+ getFileName(getFile(cobj)) + ' - ' + EditorID(cobj) + ' '+ IntToHex(GetLoadOrderFormID(cobj), 8) + ' *****');
-    
-    result := true;
 end;
 
 //============================================================================
 procedure processOmodAndCobj(cobj: IInterface);
 var
-    omod, appr: IInterface;
+    cnam, omod, appr: IInterface;
     i: integer;
     faction, listAppr_listMnams, listMnams: TStringList;
 
 begin
+    cnam := winningOverride(linksTo(elementByPath(cobj, 'CNAM')));
+    if (getFileName(getFile(cnam)) <> getFileName(patchFile)) then exit;
+    copyOverrideToPatch(cobj);
+
     omod := winningOverride(linksTo(elementByPath(cobj, 'CNAM')));
     addMessage('***** Processing Paintjob ' + getFileName(getFile(MasterOrSelf(omod))) + ' - ' + EditorID(omod) + ' '+ IntToHex(GetLoadOrderFormID(omod), 8) + ' *****');
     

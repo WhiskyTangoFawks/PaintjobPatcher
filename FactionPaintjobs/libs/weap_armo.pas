@@ -1,69 +1,5 @@
 unit FPD_weap_armo;
 
-
-//============================================================================
-function evalItem(item: IInterface): boolean;
-var
-    sig, apEdid: string;
-    countFaction, countAp, countMnams: integer;
-    listAppr_listMnams_listPaintjobs, listMnams_listPaintjobs, listPaintjobs, cacheApprFormId, cacheKywdFormId: TStringList;
-    paintjob, ap : IInterface;
-    
-begin
-    //filter out non playable and unused
-    result := false;
-    if (getElementEditValues(item, 'Record Header\record flags\Non-Playable') = '1') then exit; //skip unplayable items
-    if assigned(elementByPath(item, 'CNAM')) then exit; //templated weapons
-    if assigned(elementByPath(item, 'TNAM')) then exit; //templated armor
-    if (winningRefByCount(item) < 1) then exit; //skip unused items
-
-    
-    if not isItemFiltered(item, filter_eval_item, cacheApprFormId, cacheKywdFormId) then exit;
-    sig := signature(item);
-    
-    addMessage('***** Evaluating '+ getFileName(getFile(MasterOrSelf(item))) + ' - ' + EditorID(item) + ' '+ IntToHex(GetLoadOrderFormID(item), 8) + ' *****');
-    
-    
-    cacheApprFormId := getApprCache(item);
-    cacheKywdFormId := getKwdaCache(item);
-
-    if evalMissingKeywords(item, cacheApprFormId, cacheKywdFormId) then begin
-        result := true;
-        exit;
-    end else begin
-        //if it doesn't have keywords or attach points
-        if not assigned(ElementByPath(item, 'APPR')) then begin
-            logg(1, 'skipping item with no APPRs, and no compatible APPRs to add');
-            exit;
-        end;
-        if not assigned(ElementByPath(item, 'Keywords\KWDA')) then begin
-            logg(1, 'skipping item with no KWDAs, and no compatible KWDAs to add');
-            exit;
-        end;
-    end;
-    
-    for countFaction := 0 to listMaster.count()-1 do begin
-        listAppr_listMnams_listPaintjobs := listMaster.objects[countFaction].objects[fact_paintjobs];
-        for countAp := 0 to listAppr_listMnams_listPaintjobs.count-1 do begin
-            listMnams_listPaintjobs := listAppr_listMnams_listPaintjobs.objects[countAp];
-            //grab the AP from the first paintjob in teh first list- because it's sorted by AP they're all the same after this
-            ap := linksTo(elementByPath(ObjectToElement(listMnams_listPaintjobs.objects[0].objects[0]), 'DATA\Attach Point'));
-            apEdid := editorId(ap);
-            
-            for countMnams := 0 to listMnams_listPaintjobs.count-1 do begin
-                listPaintjobs := listMnams_listPaintjobs.objects[countMnams];
-                paintjob := ObjectToElement(listPaintjobs.objects[0]);
-
-                if isPaintjobCompatibleKeyword(paintjob, cacheApprFormId, cacheKywdFormId) then begin
-                    result := true;
-                    cacheApprFormId.free;
-                    cacheKywdFormId.free;
-                    exit;
-                end
-            end;
-        end;
-    end;
-end;
 //============================================================================
 procedure processItem(item: IInterface);
 var
@@ -71,13 +7,31 @@ var
     countFaction: integer;
 
 begin
-    addMessage('***** Processing '+ getFileName(getFile(MasterOrSelf(item))) + ' ' + EditorID(item) + ' '+ IntToHex(GetLoadOrderFormID(item), 8) + ' *****');
-    
-    processMissingKeywords(item);
-    if not assigned(ElementByPath(item, 'Object Template\Combinations')) then addDefaultTemplate(item);
+    if (getElementEditValues(item, 'Record Header\record flags\Non-Playable') = '1') then exit; //skip unplayable items
+    if assigned(elementByPath(item, 'CNAM')) then exit; //templated weapons
+    if assigned(elementByPath(item, 'TNAM')) then exit; //templated armor
+    if (winningRefByCount(item) < 1) then exit; //skip unused items
     
     cacheApprFormId := getApprCache(item);
     cacheKywdFormId := getKwdaCache(item);
+    if not isItemFiltered(item, filter_eval_item, cacheApprFormId, cacheKywdFormId) then exit;
+
+    addMessage('***** Processing '+ getFileName(getFile(MasterOrSelf(item))) + ' ' + EditorID(item) + ' '+ IntToHex(GetLoadOrderFormID(item), 8) + ' *****');
+    
+    item := addMissingKeywords(item, cacheApprFormId, cacheKywdFormId);
+    if not assigned(ElementByPath(item, 'APPR')) then begin 
+        logg(1, 'No APPR path found, skipping');
+        exit;
+    end;
+    if not assigned(ElementByPath(item, 'Keywords\KWDA')) then begin
+        logg(1, 'No Keywords\KWDA path found, skipping');
+        exit;
+    end;
+    if not hasCompatiblePaintjob(item, cacheApprFormId, cacheKywdFormId) then exit;
+    
+    item := copyOverrideToPatch(item);
+    
+    if not assigned(ElementByPath(item, 'Object Template\Combinations')) then addDefaultTemplate(item);
 
     //TODO - remove "color" words from armor Names, and fix names that include a '|' or '-'
 
@@ -139,6 +93,37 @@ begin
     cacheKywdFormId.free;
     
 end;
+//=============================
+function hasCompatiblePaintjob(item : IInterface; cacheApprFormId, cacheKywdFormId: TStringList):boolean;
+var
+    countFaction, countAp, countMnams: integer;
+    listAppr_listMnams_listPaintjobs, listMnams_listPaintjobs, listPaintjobs :TStringList;
+    ap, paintjob: IInterface;
+    apEdid: String;
+begin
+    result := false;
+    for countFaction := 0 to listMaster.count()-1 do begin
+        listAppr_listMnams_listPaintjobs := listMaster.objects[countFaction].objects[fact_paintjobs];
+        for countAp := 0 to listAppr_listMnams_listPaintjobs.count-1 do begin
+            listMnams_listPaintjobs := listAppr_listMnams_listPaintjobs.objects[countAp];
+            //grab the AP from the first paintjob in teh first list- because it's sorted by AP they're all the same after this
+            ap := linksTo(elementByPath(ObjectToElement(listMnams_listPaintjobs.objects[0].objects[0]), 'DATA\Attach Point'));
+            apEdid := editorId(ap);
+            
+            for countMnams := 0 to listMnams_listPaintjobs.count-1 do begin
+                listPaintjobs := listMnams_listPaintjobs.objects[countMnams];
+                paintjob := ObjectToElement(listPaintjobs.objects[0]);
+
+                if isPaintjobCompatibleKeyword(paintjob, cacheApprFormId, cacheKywdFormId) then begin
+                    result := true;
+                    exit;
+                end;
+            end;
+        end;
+    end;
+    logg(1, 'No compatible patinjobs found');
+end;
+
 //=============================
 procedure addDefaultTemplate(item: IInterface);
 var
@@ -324,14 +309,14 @@ begin
             
             //Create the modcols
             modcolEdid := 'modcol_'+ '_' + apEdid + '-' + listMnams.DelimitedText + faction[fact_name];
-            modcol := MainRecordByEditorID(GroupBySignature(mxPatchFile, 'OMOD'), modcolEdid);
+            modcol := MainRecordByEditorID(GroupBySignature(patchFile, 'OMOD'), modcolEdid);
             
             //If the modcol already exists, then I don't need to do anything else, it's already correctly populated with the same filter output
             if assigned(modcol) then begin
                 logg(1, 'Modcol already exists: ' + modcolEdid);
                 
             end else begin //create it new
-                modcol := wbCopyElementToFile(template_modcol, mxPatchFile, true, true);
+                modcol := copyRecordToFile(template_modcol, patchFile, true);
                 SetElementEditValues(modcol, 'EDID', modcolEdid);
                 SetElementEditValues(modcol, 'FULL', faction[fact_name]);
                 SetEditValue(ElementByPath(modcol, 'DATA\Attach Point'), IntToHex(GetLoadOrderFormID(ap), 8));

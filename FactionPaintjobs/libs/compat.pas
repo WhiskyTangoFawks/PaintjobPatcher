@@ -1,6 +1,6 @@
 unit FDP_compat;
 var
-    listCompatMatswaps, listCompatKeywords, apprsToAdd, kywdsToAdd: TStringList;
+    listCompatMatswaps, listCompatKeywords: TStringList;
 //============================================================================
 procedure initCompat();
 begin
@@ -11,14 +11,6 @@ begin
     listCompatKeywords := TStringList.create;
     listCompatKeywords.sorted := true;
     listCompatKeywords.Duplicates := dupIgnore;
-
-    kywdsToAdd := TStringList.create;
-    kywdsToAdd.sorted := true;
-    kywdsToAdd.Duplicates := dupIgnore;
-
-    apprsToAdd := TStringList.create;
-    apprsToAdd.sorted := true;
-    apprsToAdd.Duplicates := dupIgnore;
 end;
 
 //============================================================================
@@ -75,13 +67,13 @@ begin
 
 end;
 //============================================================================
-function evalMissingKeywords(item: IInterface; cacheApprFormId, cacheKywdFormId: TStringList): boolean;
+function addMissingKeywords(item: IInterface; cacheApprFormId, cacheKywdFormId: TStringList): IInterface;
 var
     cacheMatSwap, apprKywds, apprKywd : TStringList;
     i, j, matIndex : Integer;
     apprId, kywdId: String;
+    entry: iinterface;
 begin
-    result := false;
     cacheMatSwap := getMaterials(item);
     
     //for each material with an indexed material swap
@@ -95,54 +87,27 @@ begin
             kywdId := apprKywd[1];
             
             if cacheApprFormId.indexOf(apprId) = -1 then begin 
-                getOrAddList(apprsToAdd, IntToHex(getLoadOrderFormId(item), 8)).add(apprId);
+                item := copyOverrideToPatch(item);
+                if assigned(ElementByPath(item, 'APPR')) then entry := ElementAssign(ElementByPath(item, 'APPR'), HighInteger, nil, False)
+                else entry := elementByIndex(add(item, 'APPR', true), 0);
+                logg(3, 'Adding Attach Point ' + apprId);
+                setEditValue(entry, apprId);
                 cacheApprFormId.add(apprId);
-                logg(2, 'Identified missing APPR: ' +apprId );
-                result := true;
             end;
             if cacheKywdFormId.indexOf(kywdId) = -1 then begin 
-                getOrAddList(kywdsToAdd, IntToHex(getLoadOrderFormId(item), 8)).add(kywdId);
+                item := copyOverrideToPatch(item);
+                if assigned(ElementByPath(item, 'Keywords\KWDA')) then entry := ElementAssign(ElementByPath(item, 'Keywords\KWDA'), HighInteger, nil, False)
+                else entry := elementByIndex(add(add(item, 'Keywords', true), 'KWDA', true), 0);
+                logg(3, 'Adding keyword ' + kywdId);
+                setEditValue(entry,  kywdId);
                 cacheKywdFormId.add(kywdId);
-                logg(2, 'Identified missing KYWD: ' +kywdId);
-                result := true;
             end;
         end;
     end;
     cacheMatSwap.free;
+    result := item;
 end;
 //============================================================================
-
-procedure processMissingKeywords(item: IInterface);
-var
-    formId: String;
-    apprIndex, kywdIndex, i: integer;
-    entry: IInterface;
-    list: TStringList;
-
-begin
-    formId := IntToHex(getLoadOrderFormId(item),8);
-    apprIndex := apprsToAdd.indexOf(formId);
-    if apprIndex <> -1 then begin
-        list := apprsToAdd.objects[apprIndex];
-        for i := 0 to list.count-1 do begin
-            if assigned(ElementByPath(item, 'APPR')) then entry := ElementAssign(ElementByPath(item, 'APPR'), HighInteger, nil, False)
-            else entry := elementByIndex(add(item, 'APPR', true), 0);
-            logg(3, 'Adding Attach Point ' + list[i]);
-            setEditValue(entry, list[i]);
-        end;
-    end;
-    kywdIndex := kywdsToAdd.indexOf(formId);
-    if kywdIndex <> -1 then begin
-        list := kywdsToAdd.objects[kywdIndex];
-        for i := 0 to list.count-1 do begin
-            if assigned(ElementByPath(item, 'Keywords\KWDA')) then entry := ElementAssign(ElementByPath(item, 'Keywords\KWDA'), HighInteger, nil, False)
-            else entry := elementByIndex(add(add(item, 'Keywords', true), 'KWDA', true), 0);
-            logg(3, 'Adding keyword ' + list[i]);
-            setEditValue(entry,  list[i]);
-        end;
-    end;
-
-end;
 
 
 end.
