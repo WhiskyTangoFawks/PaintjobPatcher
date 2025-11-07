@@ -20,8 +20,6 @@ begin
         fileHeader := ElementByIndex(patchFile, 0);
         SetElementEditValues(fileHeader, 'CNAM - Author', author);
   end;
-  
-
   addExclusion(getFileName(patchFile));
 end;
 
@@ -105,7 +103,7 @@ begin
     masters := ElementByPath(ElementByIndex(GetFile(rec), 0), 'Master Files');
     patchMastersCount := elementCount(ElementByPath(ElementByIndex(f, 0), 'Master Files'));
     if patchMastersCount + elementCount(masters) > 254 then begin
-        cleanMasters(f);
+        //cleanMasters(f);
         patchMastersCount := elementCount(ElementByPath(ElementByIndex(f, 0), 'Master Files'));
         if patchMastersCount + elementCount(masters) > 254 then begin
             raise exception.create('Unable to add all potentially required masters to patch');
@@ -116,7 +114,8 @@ begin
     for i := 0 to ElementCount(masters) - 1 do begin
         AddMasterIfMissing(f, getElementEditValues(ElementByIndex(masters, i), 'MAST'));
     end;
-    result := wbCopyElementToFile(rec, f, asNew, True);
+    //AddRequiredElementMasters(rec, f, false);
+    result := wbCopyElementToFile(rec, f, asNew, true);
 end;
 //============
 function removeIdenticalToMaster(e: IInterface): integer;
@@ -151,7 +150,8 @@ var
 begin
     g := GroupBySignature(patchFile, sig);
     if not Assigned(g) then continue;
-    for i := 0 to Pred(ElementCount(g)) do removeIdenticalToMaster(ElementByIndex(g, i));
+    //TODO - for some reston the isMaster check isn't working, and it's just skipping everything
+    for i := 0 to Pred(ElementCount(g)) do if not isMaster(ElementByIndex(g, i)) then removeIdenticalToMaster(ElementByIndex(g, i));
 end;
 
 //============

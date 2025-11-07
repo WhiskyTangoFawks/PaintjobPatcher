@@ -17,7 +17,7 @@ var
 
 const	
     masterPlugin = fileByName('FactionPaintjobs.esp');
-    log_level = 1; //1=trace, 2=debug, 3=info, 4=warn, 5=error
+    log_level = 3; //1=trace, 2=debug, 3=info, 4=warn, 5=error
 
 function Initialize: Integer;
 var
@@ -108,7 +108,10 @@ begin
     cleanPatchGroup('FURN');
     cleanPatchGroup('ARMO');
     cleanPatchGroup('WEAP');
+    cleanPatchGroup('COBJ');
+    cleanPatchGroup('OMOD');
     CleanMasters(patchFile);
+    sortMasters(patchFile);
     
     config_factions.free;
     config_options.free;
@@ -125,11 +128,14 @@ end;
 function winningRefByCount(e: IInterface): integer;
 var
     i: integer;
-
+    ref: IInterface;
 begin
     result := 0;
-    for i := 0 to ReferencedByCount(e)-1 do 
-        if isWinningOverride(ReferencedByIndex(e, i)) then result := result + 1;
+    for i := 0 to ReferencedByCount(e)-1 do begin
+        ref := ReferencedByIndex(e, i);
+        if Copy(editorId(ref), 1, 2) = 'QA' then continue;
+        if isWinningOverride(ref) then result := result + 1;
+    end;
       
 end;
 //============================================================================
